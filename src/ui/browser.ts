@@ -35,7 +35,8 @@ function pad(line: string, width: number): string {
 }
 
 function stateWord(agent: Subagent): string {
-	return agent.state === "idle" ? "done" : agent.state;
+	const word = agent.state === "idle" ? "done" : agent.state;
+	return agent.closed && agent.state !== "stopped" ? `${word} · closed` : word;
 }
 
 /**
@@ -344,7 +345,13 @@ export class AgentsBrowser implements Component, Focusable {
 			return lines.map((line) => truncateToWidth(line, width));
 		}
 
-		const placeholder = agent ? (agent.busy ? `Steer ${agent.info.name}…` : `Give ${agent.info.name} more work…`) : "";
+		const placeholder = !agent
+			? ""
+			: agent.closed
+				? `${agent.info.name} has closed. Ask the main agent to start a new one.`
+				: agent.busy
+					? `Steer ${agent.info.name}…`
+					: `Give ${agent.info.name} more work…`;
 		const input = this.steerInput.getValue() ? (this.steerInput.render(width - 2)[0] ?? "") : `${t.fg("accent", "❯")} ${t.fg("dim", placeholder)}`;
 		const flash = this.flash && this.flash.until > Date.now() ? this.flash.text : undefined;
 		if (!flash) this.flash = undefined;

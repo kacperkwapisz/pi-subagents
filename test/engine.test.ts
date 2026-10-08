@@ -181,3 +181,55 @@ test("the thinking level can be chosen per agent, and unknown levels are refused
 		await manager.stopAll();
 	}
 });
+
+test("a finished agent closes by itself after its keep-open time, keeping its answer", { timeout: 60_000 }, async () => {
+	const { manager, context } = setup("echo");
+	try {
+		const agent = await manager.start({ task: "one-off job", keepOpenMs: 300 }, context);
+		await agent.whenSettled();
+		assert.equal(agent.closed, false, "still open right after finishing");
+		await new Promise((resolve) => setTimeout(resolve, 900));
+		assert.equal(agent.closed, true);
+		assert.equal(agent.state, "idle", "a normal close is not a failure");
+		assert.equal(agent.result, "Done: one-off job");
+		await assert.rejects(agent.send("more"), /has finished and closed\. Start a new agent/);
+	} finally {
+		await manager.stopAll();
+	}
+});
+
+test("keepOpen 0 closes at once; more work in time cancels the close", { timeout: 60_000 }, async () => {
+	const { manager, context } = setup("echo");
+	try {
+		const quick = await manager.start({ task: "quick", keepOpenMs: 0 }, context);
+		await quick.whenSettled();
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		assert.equal(quick.closed, true);
+
+		const kept = await manager.start({ task: "first", keepOpenMs: 700 }, context);
+		await kept.whenSettled();
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		await kept.send("second");
+		await kept.whenSettled();
+		assert.equal(kept.result, "Done: second", "it took the follow-up");
+		assert.equal(kept.closed, false, "the countdown restarted after the follow-up");
+	} finally {
+		await manager.stopAll();
+	}
+});
+
+test("closed agents don't count towards the limit and are dropped when forgotten", { timeout: 60_000 }, async () => {
+	const { manager, context } = setup("echo");
+	try {
+		const done = await manager.start({ task: "x", name: "finished", keepOpenMs: 0 }, context);
+		await done.whenSettled();
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		const open = await manager.start({ task: "y", name: "open" }, context);
+		assert.deepEqual(manager.list().map((agent) => agent.info.name), ["finished", "open"]);
+		manager.forgetClosed();
+		assert.deepEqual(manager.list().map((agent) => agent.info.name), ["open"]);
+		await open.whenSettled();
+	} finally {
+		await manager.stopAll();
+	}
+});

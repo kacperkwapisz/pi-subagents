@@ -116,3 +116,21 @@ test("agents started without waiting are collected with agent_wait, messaged, li
 		await close();
 	}
 });
+
+test("keepOpen from the tool closes a finished agent at once", { timeout: 90_000 }, async () => {
+	let list = "";
+	const { session, close } = await startSession([
+		fauxAssistantMessage(fauxToolCall("agent_start", { agents: [{ task: "quick job", name: "quick", keepOpen: 0 }] })),
+		fauxAssistantMessage(fauxToolCall("agent_list", {})),
+		(context) => {
+			list = toolResults(context).at(-1) ?? "";
+			return fauxAssistantMessage("ok");
+		},
+	]);
+	try {
+		await session.prompt("Run one quick agent.");
+		assert.match(list, /^quick \(worker\): idle, closed, done;/);
+	} finally {
+		await close();
+	}
+});

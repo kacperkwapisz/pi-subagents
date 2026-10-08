@@ -102,8 +102,12 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 				return { consume: true };
 			});
 		});
-		// A new message from the user: agents that already finished leave the widget.
-		pi.on("before_agent_start", () => widget.hideSettled());
+		// A new message from the user: finished agents leave the widget, and closed ones are
+		// forgotten entirely so nothing builds up over a long session.
+		pi.on("before_agent_start", () => {
+			widget.hideSettled();
+			manager.forgetClosed();
+		});
 		pi.on("session_shutdown", async () => {
 			stopListening?.();
 			stopListening = undefined;

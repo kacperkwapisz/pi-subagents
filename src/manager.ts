@@ -8,8 +8,11 @@ import { type PiCommand, RpcChild } from "./rpc.ts";
 /** Set in every subagent's environment; pi-subagents stays passive there (no nested agents yet). */
 export const CHILD_ENV = "PI_SUBAGENTS_CHILD";
 
-/** At most this many agents exist at once; stopping one frees a place. */
+/** At most this many agents are open at once; a closed agent frees its place. */
 export const MAX_AGENTS = 8;
+/** A finished agent stays open this long for follow-ups unless asked otherwise. */
+export const DEFAULT_KEEP_OPEN_MS = 30_000;
+export const MAX_KEEP_OPEN_MS = 600_000;
 
 export interface StartRequest {
 	task: string;
@@ -21,6 +24,8 @@ export interface StartRequest {
 	model?: string;
 	/** How much the agent thinks; the agent type's or the parent's when absent. */
 	thinking?: string;
+	/** How long it stays open after finishing; DEFAULT_KEEP_OPEN_MS when absent, 0 closes at once. */
+	keepOpenMs?: number;
 }
 
 /** Pi's thinking levels; Pi lowers one a model can't do to the nearest it supports. */
@@ -73,9 +78,9 @@ export class AgentManager {
 
 	/** Starts a subagent on its task. */
 	async start(request: StartRequest, context: StartContext): Promise<Subagent> {
-		const live = this.list().filter((agent) => agent.state !== "stopped");
-		if (live.length >= MAX_AGENTS) {
-			throw new Error(`There are already ${MAX_AGENTS} agents. Stop one with agent_stop first.`);
+		const open = this.list().filter((agent) => !agent.closed);
+		if (open.length >= MAX_AGENTS) {
+			throw new Error(`There are already ${MAX_AGENTS} open agents. Stop ones you no longer need with agent_stop first.`);
 		}
 		const typeName = request.type ?? "worker";
 		const type = context.types.find((candidate) => candidate.name === typeName);
@@ -113,10 +118,12 @@ export class AgentManager {
 			env: { ...this.options.env, [CHILD_ENV]: "1" },
 			pi: this.options.pi,
 		});
+		const keepOpenMs = Math.min(MAX_KEEP_OPEN_MS, Math.max(0, request.keepOpenMs ?? DEFAULT_KEEP_OPEN_MS));
 		const agent = new Subagent(
 			{ name, type: type.name, task: request.task, model: model ?? "", thinking, sessionFile },
 			child,
 			this.options.askQuestion,
+			keepOpenMs,
 		);
 		agent.onChange(() => this.changed());
 		this.agents.set(name, agent);
@@ -139,6 +146,18 @@ export class AgentManager {
 		await agent.stop();
 		rmSync(join(this.options.sessionDir(), `${name}.prompt.md`), { force: true });
 		this.changed();
+	}
+
+	/** Drops closed agents entirely, freeing their transcripts. Called when the user sends a new message. */
+	forgetClosed(): void {
+		let removed = false;
+		for (const [name, agent] of this.agents) {
+			if (!agent.closed) continue;
+			this.agents.delete(name);
+			rmSync(join(this.options.sessionDir(), `${name}.prompt.md`), { force: true });
+			removed = true;
+		}
+		if (removed) this.changed();
 	}
 
 	async stopAll(): Promise<void> {

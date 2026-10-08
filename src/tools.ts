@@ -3,7 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { Subagent } from "./agent.ts";
 import { discoverAgentTypes } from "./agent-types.ts";
-import { type AgentManager, MAX_AGENTS, THINKING_LEVELS } from "./manager.ts";
+import { type AgentManager, DEFAULT_KEEP_OPEN_MS, MAX_AGENTS, MAX_KEEP_OPEN_MS, THINKING_LEVELS } from "./manager.ts";
 import { safely } from "./ui/safe.ts";
 import { type AgentsDetails, renderAgentsResult, renderStartCall, renderWaitCall, snapshot } from "./ui/tool-render.ts";
 
@@ -66,14 +66,15 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 		label: "Start agents",
 		description:
 			`Start subagents. Each works on its own task in a separate Pi process with a fresh context and returns only its final answer. ` +
-			`Agent types: ${typeList}. Up to ${MAX_AGENTS} at once. ` +
+			`Agent types: ${typeList}. Up to ${MAX_AGENTS} open at once. ` +
+			`Agents are one-off: each closes ${DEFAULT_KEEP_OPEN_MS / 1000}s after it finishes unless given more work, so plan the whole job into the task. ` +
 			`By default this waits and returns their answers; with wait: false it returns right away so you can keep working, then use agent_wait.`,
 		promptSnippet: "agent_start: delegate tasks to subagents that run in parallel with their own context",
 		promptGuidelines: [
 			"Give each agent a complete, self-contained task: it has not seen this conversation.",
 			"Start independent tasks together in one agent_start call so they run in parallel.",
 			"Set thinking to match the task: low or minimal for lookups and simple edits, medium for ordinary work, high or xhigh for hard reviews, debugging and design. Leave it out to use yours.",
-			"Stop agents with agent_stop once their work is done.",
+			"Agents close by themselves shortly after finishing. Only set keepOpen when you will send follow-ups, and agent_stop agents you no longer need instead of leaving them open.",
 		],
 		parameters: Type.Object({
 			agents: Type.Array(
@@ -82,6 +83,13 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 					type: Type.Optional(Type.String({ description: "Agent type; worker when omitted." })),
 					name: Type.Optional(Type.String({ description: "Short name shown to the user, e.g. auth-review." })),
 					model: Type.Optional(Type.String({ description: "provider/model, only to use a different model than yours." })),
+					keepOpen: Type.Optional(
+						Type.Number({
+							minimum: 0,
+							maximum: MAX_KEEP_OPEN_MS / 1000,
+							description: `Seconds to stay open after finishing, for follow-ups with agent_send (default ${DEFAULT_KEEP_OPEN_MS / 1000}; 0 closes it right away).`,
+						}),
+					),
 					thinking: Type.Optional(
 						StringEnum(THINKING_LEVELS, { description: "How much the agent thinks; yours when omitted. Lowered automatically if the model can't do it." }),
 					),
@@ -103,7 +111,11 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 				thinking: ctx.thinkingLevel,
 				types: discoverAgentTypes(ctx.cwd, ctx.isProjectTrusted()),
 			};
-			const results = await Promise.allSettled(params.agents.map((request) => manager.start(request, context)));
+			const results = await Promise.allSettled(
+				params.agents.map(({ keepOpen, ...request }) =>
+					manager.start({ ...request, keepOpenMs: keepOpen === undefined ? undefined : keepOpen * 1000 }, context),
+				),
+			);
 			const started = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
 			const problems = results.flatMap((result) => (result.status === "rejected" ? [`Could not start: ${(result.reason as Error).message}`] : []));
 			if (params.wait === false) {
@@ -154,7 +166,11 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 			const agent = manager.get(params.name);
 			if (!agent) return text(`No agent named ${params.name}.`);
 			const wasBusy = agent.busy;
-			await agent.send(params.message, params.followUp ?? false);
+			try {
+				await agent.send(params.message, params.followUp ?? false);
+			} catch (error) {
+				return text((error as Error).message);
+			}
 			return text(
 				wasBusy
 					? `${params.followUp ? "Queued for" : "Sent to"} ${agent.info.name}. Use agent_wait for its answer.`
@@ -177,7 +193,8 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 						const tokens = `${agent.usage.input} in / ${agent.usage.output} out`;
 						const work = agent.status ? `${agent.status} (${agent.activity})` : agent.activity;
 						const thinking = agent.info.thinking && agent.info.thinking !== "off" ? `, thinking ${agent.info.thinking}` : "";
-						return `${agent.info.name} (${agent.info.type}): ${agent.state}, ${work}; ${agent.info.model}${thinking}; ${tokens}`;
+						const state = agent.closed && agent.state !== "stopped" ? `${agent.state}, closed` : agent.state;
+						return `${agent.info.name} (${agent.info.type}): ${state}, ${work}; ${agent.info.model}${thinking}; ${tokens}`;
 					})
 					.join("\n"),
 			);

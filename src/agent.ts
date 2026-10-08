@@ -95,6 +95,14 @@ export class Subagent {
 	activity = "starting";
 	/** What the agent says it is working on, in its own words. */
 	status?: string;
+	/**
+	 * Its process has ended (it finished and its keep-open time ran out, or it was stopped).
+	 * The final state, answer and transcript stay readable; it takes no more work.
+	 */
+	closed = false;
+	/** How long it stays open after finishing, for follow-ups. */
+	readonly keepOpenMs: number;
+	private closeTimer?: ReturnType<typeof setTimeout>;
 	private shownStep = "starting";
 	private shownStepAt = 0;
 	/** Usage of finished replies; see `usage` for the live total. */
@@ -115,13 +123,14 @@ export class Subagent {
 	private currentThinking?: Extract<TranscriptItem, { kind: "thinking" }>;
 	private lastAssistant?: { stopReason?: string; errorMessage?: string; text: string };
 
-	constructor(info: AgentInfo, child: RpcChild, askQuestion: QuestionHandler) {
+	constructor(info: AgentInfo, child: RpcChild, askQuestion: QuestionHandler, keepOpenMs = 30_000) {
 		this.info = info;
+		this.keepOpenMs = keepOpenMs;
 		this.child = child;
 		child.onEvent((record) => this.handleEvent(record));
 		child.onUiRequest((request) => this.handleUiRequest(request, askQuestion));
 		void child.exited.then(() => {
-			if (this.state === "stopped") return;
+			if (this.state === "stopped" || this.closed) return;
 			this.finishRun();
 			this.state = "failed";
 			this.error ??= child.errorOutput.split("\n").slice(-3).join("\n") || "The subagent's Pi process exited.";
@@ -187,7 +196,9 @@ export class Subagent {
 
 	/** Sends more input: steers a running agent, or starts a new run on an idle one. */
 	async send(message: string, followUp = false): Promise<void> {
+		if (this.closed) throw new Error(`${this.info.name} has finished and closed. Start a new agent for more work.`);
 		if (this.state === "stopped" || !this.child.running) throw new Error(`${this.info.name} is no longer running.`);
+		this.cancelClose();
 		const via = !this.busy ? "message" : followUp ? "follow-up" : "steer";
 		this.transcript.push({ kind: "prompt", text: message, via });
 		this.changed();
@@ -206,6 +217,8 @@ export class Subagent {
 
 	/** Ends the agent and its process. */
 	async stop(): Promise<void> {
+		this.cancelClose();
+		this.closed = true;
 		this.finishRun();
 		this.state = "stopped";
 		this.activity = "stopped";
@@ -366,6 +379,32 @@ export class Subagent {
 			this.result = last?.text ?? "";
 		}
 		this.wakeWaiters();
+		this.scheduleClose();
+	}
+
+	/** One-off by default: a finished agent closes after its keep-open time unless given more work. */
+	private scheduleClose(): void {
+		this.cancelClose();
+		if (this.keepOpenMs <= 0) {
+			void this.close();
+			return;
+		}
+		this.closeTimer = setTimeout(() => void this.close(), this.keepOpenMs);
+		this.closeTimer.unref?.();
+	}
+
+	private cancelClose(): void {
+		if (this.closeTimer) clearTimeout(this.closeTimer);
+		this.closeTimer = undefined;
+	}
+
+	/** Ends the process but keeps the final state, answer and transcript. */
+	private async close(): Promise<void> {
+		if (this.closed || this.busy) return;
+		this.cancelClose();
+		this.closed = true;
+		this.changed();
+		await this.child.stop();
 	}
 
 	private handleUiRequest(request: UiRequest, askQuestion: QuestionHandler): void {
