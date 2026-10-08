@@ -19,6 +19,19 @@ doing right now, its model and account, time, tokens and cost. When they finish,
 go back to the model, and each one gets a short summary in the chat (Ctrl+O shows the full
 answers).
 
+Agents are one-off: each one closes by itself 30 seconds after it finishes, unless it gets more
+work in that time, so finished agents don't pile up. The model can keep one open longer when it
+plans follow-ups, and stops agents it no longer needs. Closed agents are cleared from view when
+you send your next message.
+
+Agents report what they are working on in their own words ("Reading the auth module", "Found 2
+races; checking the tests"), shown next to their name with the current step after it. The model
+can also set how much each agent thinks (`off` to `max`), for example little for a quick lookup
+and a lot for a hard review.
+
+When the model starts agents in the background and carries on, their results come back on
+their own: you get a notification, and the main agent picks up the answer in its next turn.
+
 Press `←` in an empty editor, or run `/agents`, to open the agents view: your agents on the
 left, the selected one's live work on the right, and a box to steer it.
 
@@ -64,7 +77,21 @@ Each agent is `pi --mode rpc` started with your Pi, model and thinking level. It
 is kept in `~/.pi/agent/subagents/`. Agents end when you stop them or quit Pi.
 
 For the model there are five tools: `agent_start` (one or more agents; waits for their answers
-unless told not to), `agent_wait`, `agent_send`, `agent_list` and `agent_stop`.
+unless told not to; per agent you can set its type, model, thinking level and how long it stays
+open after finishing), `agent_wait`, `agent_send`, `agent_list` and `agent_stop`.
+
+## For other extensions
+
+Like bg-jobs, pi-subagents answers on Pi's `pi.events` bus, so for example a goal loop can wait
+for background agents:
+
+```ts
+pi.events.emit("pi-subagents:query", { reply: (names: string[]) => { /* agents still working */ } });
+pi.events.on("pi-subagents:finished", ({ name, status, triggersTurn }) => { /* one finished */ });
+```
+
+`triggersTurn` is false when the user stopped the agent; otherwise its result starts the main
+agent's next turn.
 
 ## Development
 

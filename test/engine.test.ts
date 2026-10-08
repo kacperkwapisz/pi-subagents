@@ -233,3 +233,19 @@ test("closed agents don't count towards the limit and are dropped when forgotten
 		await manager.stopAll();
 	}
 });
+
+test("the user stopping a running background agent is reported; a stop the model asked for isn't", { timeout: 60_000 }, async () => {
+	const { manager, context } = setup("slow");
+	const finishes: string[] = [];
+	manager.onFinish((agent, event) => finishes.push(`${agent.info.name}:${event.detached}:${event.stoppedByUser}`));
+	try {
+		const byUser = await manager.start({ task: "long", name: "mine" }, context);
+		const byModel = await manager.start({ task: "long", name: "theirs" }, context);
+		assert.ok(byUser.busy && byModel.busy);
+		await manager.stop("mine", { byUser: true });
+		await manager.stop("theirs");
+		assert.deepEqual(finishes, ["mine:true:true"]);
+	} finally {
+		await manager.stopAll();
+	}
+});

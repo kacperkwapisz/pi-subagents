@@ -10,7 +10,7 @@ import { type AgentsDetails, renderAgentsResult, renderStartCall, renderWaitCall
 /** Each agent's answer is capped before it goes back to the main model. */
 const ANSWER_LIMIT = 50_000;
 
-function answerOf(agent: Subagent): string {
+export function answerOf(agent: Subagent): string {
 	const header = `## ${agent.info.name} (${agent.info.type})`;
 	if (agent.state === "failed") return `${header}: failed\n${agent.error ?? "Unknown error."}`;
 	if (agent.state === "stopped") return `${header}: stopped`;

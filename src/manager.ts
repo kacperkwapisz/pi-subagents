@@ -53,11 +53,19 @@ function slug(text: string): string {
 	return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "agent";
 }
 
+export interface FinishEvent {
+	/** Nobody was waiting for it, so nobody has seen the result yet. */
+	detached: boolean;
+	/** The user stopped it (in the agents view) before it finished. */
+	stoppedByUser: boolean;
+}
+
 /** All subagents of one Pi session. */
 export class AgentManager {
 	private readonly options: ManagerOptions;
 	private readonly agents = new Map<string, Subagent>();
 	private readonly listeners = new Set<() => void>();
+	private readonly finishListeners = new Set<(agent: Subagent, event: FinishEvent) => void>();
 
 	constructor(options: ManagerOptions) {
 		this.options = options;
@@ -69,6 +77,16 @@ export class AgentManager {
 
 	get(name: string): Subagent | undefined {
 		return this.agents.get(name);
+	}
+
+	/** A run ended, or the user stopped a running agent. */
+	onFinish(listener: (agent: Subagent, event: FinishEvent) => void): () => void {
+		this.finishListeners.add(listener);
+		return () => this.finishListeners.delete(listener);
+	}
+
+	private finished(agent: Subagent, event: FinishEvent): void {
+		for (const listener of this.finishListeners) listener(agent, event);
 	}
 
 	onChange(listener: () => void): () => void {
@@ -126,6 +144,7 @@ export class AgentManager {
 			keepOpenMs,
 		);
 		agent.onChange(() => this.changed());
+		agent.onSettled((detached) => this.finished(agent, { detached, stoppedByUser: false }));
 		this.agents.set(name, agent);
 		child.start();
 		this.changed();
@@ -138,10 +157,12 @@ export class AgentManager {
 		return agent;
 	}
 
-	/** Ends an agent and forgets it. */
-	async stop(name: string): Promise<void> {
+	/** Ends an agent and forgets it. `byUser`: the user stopped it, not the model. */
+	async stop(name: string, options: { byUser?: boolean } = {}): Promise<void> {
 		const agent = this.agents.get(name);
 		if (!agent) return;
+		// A user stopping a background agent mid-run is news for the model; a stop it asked for isn't.
+		if (options.byUser && agent.busy && !agent.waitedOn) this.finished(agent, { detached: true, stoppedByUser: true });
 		this.agents.delete(name);
 		await agent.stop();
 		rmSync(join(this.options.sessionDir(), `${name}.prompt.md`), { force: true });

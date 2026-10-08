@@ -118,7 +118,8 @@ export class Subagent {
 	private runStartedAt?: number;
 	private readonly child: RpcChild;
 	private readonly listeners = new Set<() => void>();
-	private settleWaiters: (() => void)[] = [];
+	private readonly settleWaiters = new Set<() => void>();
+	private readonly settleListeners = new Set<(detached: boolean) => void>();
 	private currentText?: Extract<TranscriptItem, { kind: "text" }>;
 	private currentThinking?: Extract<TranscriptItem, { kind: "thinking" }>;
 	private lastAssistant?: { stopReason?: string; errorMessage?: string; text: string };
@@ -135,7 +136,11 @@ export class Subagent {
 			this.state = "failed";
 			this.error ??= child.errorOutput.split("\n").slice(-3).join("\n") || "The subagent's Pi process exited.";
 			this.activity = "exited";
+			const detached = !this.waitedOn;
+			this.closed = true;
 			this.changed();
+			this.wakeWaiters();
+			this.reportSettled(detached);
 		});
 	}
 
@@ -232,12 +237,28 @@ export class Subagent {
 		if (!this.busy) return Promise.resolve();
 		return new Promise((resolve) => {
 			const done = () => {
+				this.settleWaiters.delete(done);
 				signal?.removeEventListener("abort", done);
 				resolve();
 			};
-			this.settleWaiters.push(done);
+			this.settleWaiters.add(done);
 			signal?.addEventListener("abort", done, { once: true });
 		});
+	}
+
+	/** Whether a tool is waiting for this agent right now (and will report its answer). */
+	get waitedOn(): boolean {
+		return this.settleWaiters.size > 0;
+	}
+
+	/** Called whenever a run ends; `detached` when nobody was waiting for it. */
+	onSettled(listener: (detached: boolean) => void): () => void {
+		this.settleListeners.add(listener);
+		return () => this.settleListeners.delete(listener);
+	}
+
+	private reportSettled(detached: boolean): void {
+		for (const listener of this.settleListeners) listener(detached);
 	}
 
 	private beginRun(): void {
@@ -255,9 +276,7 @@ export class Subagent {
 	}
 
 	private wakeWaiters(): void {
-		const waiters = this.settleWaiters;
-		this.settleWaiters = [];
-		for (const wake of waiters) wake();
+		for (const wake of [...this.settleWaiters]) wake();
 	}
 
 	private changed(): void {
@@ -378,8 +397,10 @@ export class Subagent {
 			this.activity = "done";
 			this.result = last?.text ?? "";
 		}
+		const detached = !this.waitedOn;
 		this.wakeWaiters();
 		this.scheduleClose();
+		this.reportSettled(detached);
 	}
 
 	/** One-off by default: a finished agent closes after its keep-open time unless given more work. */

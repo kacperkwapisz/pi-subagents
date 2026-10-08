@@ -6,7 +6,9 @@ import { AgentManager, CHILD_ENV, type ManagerOptions } from "./manager.ts";
 import type { UiRequest } from "./rpc.ts";
 import { registerProgressTool } from "./progress.ts";
 import { Questions } from "./questions.ts";
-import { registerTools } from "./tools.ts";
+import { answerOf, registerTools } from "./tools.ts";
+import { safely } from "./ui/safe.ts";
+import { type AgentSnapshot, renderAgentsResult, snapshot } from "./ui/tool-render.ts";
 import { AgentsBrowser } from "./ui/browser.ts";
 import { AgentsWidget } from "./ui/widget.ts";
 
@@ -59,6 +61,42 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 		});
 		onManager?.(manager);
 		const widget = new AgentsWidget(manager, () => current);
+
+		pi.events.on(QUERY_EVENT, (data) => {
+			const reply = (data as { reply?: unknown } | undefined)?.reply;
+			if (typeof reply === "function") reply(manager.list().filter((agent) => agent.busy).map((agent) => agent.info.name));
+		});
+
+		// A background agent (started without waiting) finished: tell the user and the main agent,
+		// which starts its next turn with the result. A wait in progress reports the result itself.
+		manager.onFinish((agent, { detached, stoppedByUser }) => {
+			if (!detached) return;
+			const name = agent.info.name;
+			const ok = agent.state === "idle";
+			if (current?.hasUI) {
+				const what = stoppedByUser ? "stopped" : ok ? "done" : agent.state;
+				current.ui.notify(`Agent ${name} ${what}`, ok || stoppedByUser ? "info" : "error");
+			}
+			pi.events.emit(FINISHED_EVENT, { name, status: agent.state, triggersTurn: !stoppedByUser });
+			const content = stoppedByUser
+				? `The user stopped agent ${name} before it finished.`
+				: `Agent ${name} finished in the background.\n\n${answerOf(agent)}`;
+			void pi.sendMessage(
+				{ customType: RESULT_MESSAGE, content, display: true, details: snapshot(agent) },
+				stoppedByUser ? { triggerTurn: false } : { triggerTurn: true, deliverAs: "followUp" },
+			);
+		});
+
+		pi.registerMessageRenderer<AgentSnapshot>(RESULT_MESSAGE, (message, { expanded }, theme) =>
+			safely(() =>
+				renderAgentsResult(
+					message.details ? { agents: [message.details] } : undefined,
+					typeof message.content === "string" ? message.content : "",
+					{ expanded, isPartial: false },
+					theme,
+				),
+			),
+		);
 
 		let browserOpen = false;
 		const openBrowser = async (ctx: ExtensionContext, initial?: string) => {
@@ -119,5 +157,16 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 		registerTools(pi, manager);
 	};
 }
+
+/** Chat messages that bring a background agent's result to the main agent. */
+const RESULT_MESSAGE = "pi-subagents-result";
+
+/**
+ * For other extensions (such as a goal loop's wait), over pi.events, in the same shape as
+ * bg-jobs: emit `pi-subagents:query` with `{ reply(names) }` to learn which agents are working;
+ * listen to `pi-subagents:finished` for `{ name, status, triggersTurn }`.
+ */
+export const QUERY_EVENT = "pi-subagents:query";
+export const FINISHED_EVENT = "pi-subagents:finished";
 
 export default createPiSubagents();

@@ -206,7 +206,7 @@ export class AgentsBrowser implements Component, Focusable {
 			return;
 		}
 		this.confirmStop = undefined;
-		void this.manager.stop(agent.info.name).then(() => this.say(`Stopped ${agent.info.name}`));
+		void this.manager.stop(agent.info.name, { byUser: true }).then(() => this.say(`Stopped ${agent.info.name}`));
 		this.select(1);
 	}
 

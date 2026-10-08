@@ -8,7 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { type Context, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
-import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+	createAgentSession,
+	DefaultResourceLoader,
+	type ExtensionFactory,
+	SessionManager,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { createPiSubagents } from "../src/index.ts";
 import type { AgentManager } from "../src/manager.ts";
 
@@ -20,7 +26,7 @@ const toolResults = (context: Context) =>
 		.filter((m) => m.role === "toolResult")
 		.map((m) => (m.content as { type: string; text?: string }[]).map((c) => c.text ?? "").join(""));
 
-async function startSession(script: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0]) {
+async function startSession(script: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], extra?: ExtensionFactory) {
 	const dir = mkdtempSync(join(tmpdir(), "psa-session-"));
 	writeFileSync(join(dir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "x" } }));
 	// The main conversation's model; subagents inherit "faux/faux-1" and get their own scripted copy.
@@ -42,6 +48,7 @@ async function startSession(script: Parameters<ReturnType<typeof fauxProvider>["
 				},
 				(created) => (manager = created),
 			),
+			...(extra ? [extra] : []),
 		],
 	});
 	await resourceLoader.reload();
@@ -59,7 +66,7 @@ async function startSession(script: Parameters<ReturnType<typeof fauxProvider>["
 		await manager?.stopAll();
 		session.dispose();
 	};
-	return { session, close };
+	return { session, close, main, manager: () => manager! };
 }
 
 test("the main model starts two agents in parallel and gets both answers", { timeout: 90_000 }, async () => {
@@ -130,6 +137,63 @@ test("keepOpen from the tool closes a finished agent at once", { timeout: 90_000
 	try {
 		await session.prompt("Run one quick agent.");
 		assert.match(list, /^quick \(worker\): idle, closed, done;/);
+	} finally {
+		await close();
+	}
+});
+
+const until = async (check: () => boolean, ms = 20_000) => {
+	const end = Date.now() + ms;
+	while (!check()) {
+		if (Date.now() > end) throw new Error("timed out");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+};
+
+test("a background agent's result starts the main agent's next turn; other extensions hear about it", { timeout: 90_000 }, async () => {
+	let resultTurn = "";
+	const events: unknown[] = [];
+	let runningWhileWorking: string[] | undefined;
+	const { session, close, main } = await startSession(
+		[
+			fauxAssistantMessage(fauxToolCall("agent_start", { agents: [{ task: "background job", name: "helper" }], wait: false })),
+			fauxAssistantMessage("Started it; I'll pick up the result when it's ready."),
+			(context) => {
+				const last = context.messages.at(-1) as { role: string; content: unknown };
+				resultTurn = typeof last.content === "string" ? last.content : (last.content as { text?: string }[]).map((part) => part.text ?? "").join("");
+				return fauxAssistantMessage("Got the helper's result.");
+			},
+		],
+		(pi) => {
+			pi.on("tool_execution_end", () => {
+				pi.events.emit("pi-subagents:query", { reply: (names: string[]) => (runningWhileWorking = names) });
+			});
+			pi.events.on("pi-subagents:finished", (data) => events.push(data));
+		},
+	);
+	try {
+		await session.prompt("Run a helper in the background.");
+		await until(() => resultTurn !== "");
+		assert.deepEqual(runningWhileWorking, ["helper"]);
+		assert.match(resultTurn, /Agent helper finished in the background\./);
+		assert.match(resultTurn, /## helper \(worker\)\nDone: background job/);
+		assert.deepEqual(events, [{ name: "helper", status: "idle", triggersTurn: true }]);
+		await until(() => main.state.callCount === 3);
+	} finally {
+		await close();
+	}
+});
+
+test("agents someone waits for add no extra message", { timeout: 90_000 }, async () => {
+	const { session, close, main } = await startSession([
+		fauxAssistantMessage(fauxToolCall("agent_start", { agents: [{ task: "job" }] })),
+		fauxAssistantMessage("done"),
+		fauxAssistantMessage("this must not be needed"),
+	]);
+	try {
+		await session.prompt("Run one agent and wait.");
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		assert.equal(main.state.callCount, 2);
 	} finally {
 		await close();
 	}
