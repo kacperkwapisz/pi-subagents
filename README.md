@@ -40,9 +40,8 @@ Waiting has a limit too: after 5 minutes the main agent gets a check-in with how
 got and decides whether to wait longer, steer it or stop it. The agents keep working meanwhile,
 and Pi's working line says which ones it is waiting for.
 
-Press `←` in an empty editor or Ctrl+Shift+A, or run `/agents`, to open the agents view: your
-agents on the left, the selected one's live work on the right, and a box to steer it. In Pi's
-fullscreen mode (the default) you can also click a row in the list above the editor to open that
+Press `←` in an empty editor, or run `/agents`, to open the agents view: your agents on the
+left, the selected one's live work on the right, and a box to steer it. In Pi's fullscreen mode (the default) you can also click a row in the list above the editor to open that
 agent, click agents in the view to switch, and scroll with the mouse wheel.
 
 | Key | |

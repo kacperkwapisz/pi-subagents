@@ -12,9 +12,6 @@ import { type AgentSnapshot, renderAgentsResult, snapshot } from "./ui/tool-rend
 import { AgentsBrowser } from "./ui/browser.ts";
 import { AgentsWidget } from "./ui/widget.ts";
 
-/** Opens the agents view from anywhere (← also does in an empty editor). */
-export const OPEN_SHORTCUT = "ctrl+shift+a";
-
 /** Asks the user a question that an extension inside a subagent asked. */
 async function askInParent(
 	ctx: ExtensionContext | undefined,
@@ -130,11 +127,6 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 				questions.setInline(false);
 			}
 		};
-
-		pi.registerShortcut(OPEN_SHORTCUT, {
-			description: "Watch and steer your subagents",
-			handler: (ctx) => openBrowser(ctx),
-		});
 
 		pi.registerCommand("agents", {
 			description: "Watch and steer your subagents",
