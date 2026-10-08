@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { Subagent } from "./agent.ts";
 import { discoverAgentTypes } from "./agent-types.ts";
 import { type AgentManager, MAX_AGENTS } from "./manager.ts";
+import { safely } from "./ui/safe.ts";
 import { type AgentsDetails, renderAgentsResult, renderStartCall, renderWaitCall, snapshot } from "./ui/tool-render.ts";
 
 /** Each agent's answer is capped before it goes back to the main model. */
@@ -85,10 +86,10 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 			wait: Type.Optional(Type.Boolean({ description: "Wait for their answers (default true)." })),
 		}),
 		renderCall(args, theme) {
-			return renderStartCall(Array.isArray(args.agents) ? args.agents : [], theme);
+			return safely(() => renderStartCall(args, theme));
 		},
 		renderResult(result, options, theme) {
-			return renderAgentsResult(result.details as AgentsDetails | undefined, resultText(result), options, theme);
+			return safely(() => renderAgentsResult(result.details as AgentsDetails | undefined, resultText(result), options, theme));
 		},
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const context = {
@@ -117,10 +118,10 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 			names: Type.Optional(Type.Array(Type.String(), { description: "Agents to wait for." })),
 		}),
 		renderCall(args, theme) {
-			return renderWaitCall(args.names, theme);
+			return safely(() => renderWaitCall(args, theme));
 		},
 		renderResult(result, options, theme) {
-			return renderAgentsResult(result.details as AgentsDetails | undefined, resultText(result), options, theme);
+			return safely(() => renderAgentsResult(result.details as AgentsDetails | undefined, resultText(result), options, theme));
 		},
 		async execute(_id, params, signal, onUpdate) {
 			const agents = params.names?.length

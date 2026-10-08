@@ -2,6 +2,7 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { Subagent } from "../agent.ts";
 import type { AgentManager } from "../manager.ts";
+import { safeLines } from "./safe.ts";
 import { fitLine, formatCost, formatDuration, formatModel, formatTokens, stateIcon, typePill } from "./format.ts";
 
 const WIDGET_KEY = "pi-subagents";
@@ -100,7 +101,10 @@ export class AgentsWidget {
 				WIDGET_KEY,
 				(tui, theme) => {
 					this.tui = tui;
-					return { render: (width: number) => renderAgentsWidget(this.visible(), theme, width, this.frame), invalidate() {} };
+					return {
+						render: (width: number) => safeLines(() => renderAgentsWidget(this.visible(), theme, width, this.frame), width),
+						invalidate() {},
+					};
 				},
 				{ placement: "aboveEditor" },
 			);

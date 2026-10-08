@@ -72,20 +72,30 @@ function headerLeft(theme: Theme, agent: AgentSnapshot, frame: number): string {
 	return `${stateIcon(theme, agent.state, frame)} ${typePill(theme, agent.type)} ${theme.bold(agent.name)}${status ? `  ${status}` : ""}`;
 }
 
-/** The tool call line: which agents are being started, and on what. */
-export function renderStartCall(agents: { type?: string; name?: string; task: string }[], theme: Theme): Component {
+const str = (value: unknown): string => (typeof value === "string" ? value : "");
+
+/**
+ * The tool call line: which agents are being started, and on what. Models stream tool
+ * arguments, so this is drawn while they are still incomplete: every field may be missing.
+ */
+export function renderStartCall(args: unknown, theme: Theme): Component {
+	const raw = (args as { agents?: unknown } | undefined)?.agents;
+	const agents = (Array.isArray(raw) ? raw : []).map((agent) => (agent && typeof agent === "object" ? (agent as Record<string, unknown>) : {}));
+	const title = agents.length === 0 ? "Start agents" : agents.length === 1 ? "Start agent" : `Start ${agents.length} agents`;
 	return new Lines((width) => [
-		theme.fg("toolTitle", theme.bold(agents.length === 1 ? "Start agent" : `Start ${agents.length} agents`)),
+		theme.fg("toolTitle", theme.bold(title)),
 		...agents.map((agent) => {
-			const type = agent.type ?? "worker";
-			const name = agent.name ? `${theme.bold(agent.name)} ` : "";
-			return truncateToWidth(`  ${typePill(theme, type)} ${name}${theme.fg("muted", agent.task.replace(/\s+/g, " "))}`, width);
+			const type = str(agent.type) || "worker";
+			const name = str(agent.name) ? `${theme.bold(str(agent.name))} ` : "";
+			return truncateToWidth(`  ${typePill(theme, type)} ${name}${theme.fg("muted", str(agent.task).replace(/\s+/g, " "))}`, width);
 		}),
 	]);
 }
 
-export function renderWaitCall(names: string[] | undefined, theme: Theme): Component {
-	const who = names?.length ? names.join(", ") : "running agents";
+export function renderWaitCall(args: unknown, theme: Theme): Component {
+	const raw = (args as { names?: unknown } | undefined)?.names;
+	const names = (Array.isArray(raw) ? raw : []).filter((name): name is string => typeof name === "string" && name !== "");
+	const who = names.length ? names.join(", ") : "running agents";
 	return new Text(`${theme.fg("toolTitle", theme.bold("Wait for"))} ${theme.fg("muted", who)}`, 0, 0);
 }
 

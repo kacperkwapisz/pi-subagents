@@ -4,7 +4,8 @@ import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Subagent } from "../src/agent.ts";
 import { formatCost, formatDuration, formatModel, formatTokens } from "../src/ui/format.ts";
-import { type AgentSnapshot, renderAgentsResult } from "../src/ui/tool-render.ts";
+import { safely } from "../src/ui/safe.ts";
+import { type AgentSnapshot, renderAgentsResult, renderStartCall, renderWaitCall } from "../src/ui/tool-render.ts";
 import { renderAgentsWidget } from "../src/ui/widget.ts";
 
 initTheme("dark"); // Pi does this at startup; keyHint and Markdown need it
@@ -88,4 +89,22 @@ test("finished agents show the start of their answer, with the full answer on ex
 	const expanded = renderAgentsResult(details, "", { expanded: true, isPartial: false }, theme).render(100).join("\n");
 	assert.match(expanded, /Task: Review auth/);
 	assert.match(expanded, /Line four/);
+});
+
+test("tool calls render while the model is still streaming their arguments", () => {
+	// A real model streams arguments: fields appear one by one, so every one may be missing.
+	for (const args of [undefined, {}, { agents: [] }, { agents: [{}] }, { agents: [{ type: "scout" }, null, 7] }, { agents: "x" }]) {
+		assert.doesNotThrow(() => renderStartCall(args, theme).render(80), JSON.stringify(args));
+	}
+	assert.match(renderStartCall({ agents: [] }, theme).render(80)[0]!, /^Start agents$/);
+	assert.match(renderStartCall({ agents: [{ type: "scout", task: "look  around" }] }, theme).render(80).join("\n"), /scout {2}look around/);
+	for (const args of [undefined, {}, { names: [undefined, 3, "auth"] }]) {
+		assert.doesNotThrow(() => renderWaitCall(args, theme).render(80));
+	}
+});
+
+test("a failing renderer shows one line instead of ending the Pi session", () => {
+	const broken = safely(() => ({ render: () => { throw new Error("boom"); }, invalidate() {} }));
+	assert.deepEqual(broken.render(60), ["pi-subagents could not draw this: boom"]);
+	assert.deepEqual(safely(() => { throw new Error("bad"); }).render(60), ["pi-subagents could not draw this: bad"]);
 });

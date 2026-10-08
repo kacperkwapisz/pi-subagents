@@ -4,6 +4,7 @@ import type { Subagent } from "../agent.ts";
 import type { AgentManager } from "../manager.ts";
 import type { PendingQuestion, Questions } from "../questions.ts";
 import { fitLine, formatCost, formatDuration, formatModel, formatTokens, stateIcon, typePill } from "./format.ts";
+import { safeLines } from "./safe.ts";
 import { TranscriptRenderer } from "./transcript.ts";
 
 const FRAME_MS = 100;
@@ -123,6 +124,14 @@ export class AgentsBrowser implements Component, Focusable {
 	// ----- input -----------------------------------------------------------------------------
 
 	handleInput(data: string): void {
+		try {
+			this.handleKey(data);
+		} catch {
+			// A key must never take Pi down; the next render shows the current state.
+		}
+	}
+
+	private handleKey(data: string): void {
 		const question = this.question();
 		if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
 			this.select(matchesKey(data, Key.up) ? -1 : 1);
@@ -225,6 +234,10 @@ export class AgentsBrowser implements Component, Focusable {
 	// ----- rendering -------------------------------------------------------------------------
 
 	render(width: number): string[] {
+		return safeLines(() => this.renderView(width), width);
+	}
+
+	private renderView(width: number): string[] {
 		const t = this.theme;
 		const rows = this.tui.terminal.rows || 40;
 		const height = Math.max(14, rows);
