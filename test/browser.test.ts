@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { KeybindingsManager, TUI_KEYBINDINGS, type TUI, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import type { Subagent, TranscriptItem } from "../src/agent.ts";
 import type { AgentManager } from "../src/manager.ts";
 import { type Answer, Questions } from "../src/questions.ts";
@@ -29,7 +29,7 @@ function fakeAgent(name: string, state: Subagent["state"], transcript: Transcrip
 	return { agent, sent };
 }
 
-function setup(agents: Subagent[], rows = 30) {
+function setup(agents: Subagent[], rows = 30, keybindings?: KeybindingsManager) {
 	const stopped: string[] = [];
 	const manager = {
 		list: () => agents,
@@ -40,7 +40,7 @@ function setup(agents: Subagent[], rows = 30) {
 	questions.setInline(true);
 	let closed = false;
 	const tui = { terminal: { rows }, requestRender: () => {} } as unknown as TUI;
-	const browser = new AgentsBrowser({ manager, questions, theme, tui, close: () => (closed = true) });
+	const browser = new AgentsBrowser({ manager, questions, theme, tui, keybindings, close: () => (closed = true) });
 	const type = (text: string) => {
 		for (const char of text) browser.handleInput(char);
 	};
@@ -143,4 +143,67 @@ test("questions from an agent are answered in the browser", async () => {
 	assert.deepEqual(await skipped, { cancelled: true });
 	text = browser.render(120).join("\n");
 	assert.match(text, /❯ Steer deploy…/, "back to steering");
+});
+
+const mouse = (type: TuiMouseEvent["type"], x: number, y: number, extra: Partial<TuiMouseEvent> = {}): TuiMouseEvent => ({
+	type,
+	button: type === "wheel" ? "none" : "left",
+	x,
+	y,
+	screenX: x,
+	screenY: y,
+	width: 120,
+	height: 30,
+	shift: false,
+	alt: false,
+	ctrl: false,
+	...extra,
+});
+const click = (browser: AgentsBrowser, x: number, y: number) => {
+	const press = browser.handleMouse(mouse("press", x, y));
+	return press?.handled ? browser.handleMouse(mouse("click", x, y)) : undefined;
+};
+
+test("mouse: clicking an agent in the list selects it; the wheel scrolls the transcript", () => {
+	const long = Array.from({ length: 80 }, (_, i) => ({ kind: "text" as const, text: `line ${i}` }));
+	const first = fakeAgent("first", "running", long);
+	const second = fakeAgent("second", "idle");
+	const { browser } = setup([first.agent, second.agent]);
+	const body = (lines: string[]) => lines.slice(3).join("\n");
+	browser.render(120);
+
+	// Rows 3-4 are the first agent, 5-6 the second.
+	assert.ok(click(browser, 4, 5)?.handled);
+	assert.match(body(browser.render(120)), /> . second/);
+
+	assert.ok(click(browser, 4, 3)?.handled);
+	assert.match(body(browser.render(120)), /> . first/);
+	assert.match(body(browser.render(120)), /line 79/, "follows the newest output");
+
+	assert.ok(browser.handleMouse(mouse("wheel", 60, 10, { wheelDelta: -20 }))?.handled);
+	const scrolled = body(browser.render(120));
+	assert.doesNotMatch(scrolled, /line 79/);
+	assert.match(scrolled, /↓ 20 more lines/);
+	browser.handleMouse(mouse("wheel", 60, 10, { wheelDelta: 20 }));
+	assert.match(body(browser.render(120)), /line 79/, "scrolling back down follows again");
+
+	// The wheel over the list moves between agents.
+	browser.handleMouse(mouse("wheel", 4, 4, { wheelDelta: 3 }));
+	assert.match(body(browser.render(120)), /> . second/);
+	// Presses in the transcript are left alone, so text can still be selected there.
+	assert.equal(browser.handleMouse(mouse("press", 60, 10)), undefined);
+});
+
+test("the user's own key bindings work in the browser and show in its hints", () => {
+	const a = fakeAgent("a", "idle");
+	const b = fakeAgent("b", "idle");
+	const keys = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.down": "ctrl+n", "tui.select.cancel": "ctrl+q" });
+	const { browser, isClosed } = setup([a.agent, b.agent], 30, keys);
+	browser.handleInput("\x0e"); // ctrl+n
+	const view = browser.render(120).join("\n");
+	assert.match(view, /> . b/);
+	assert.match(view, /Ctrl\+Q close/);
+	assert.match(view, /↑Ctrl\+N agent/);
+	browser.handleInput("\x11"); // ctrl+q
+	assert.equal(isClosed(), true);
 });

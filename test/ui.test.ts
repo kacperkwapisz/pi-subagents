@@ -130,3 +130,17 @@ test("quick steps are held on screen instead of flickering", async () => {
 	assert.equal(agent.step(start + STEP_HOLD_MS - 1), "reading a.ts");
 	assert.equal(agent.step(start + STEP_HOLD_MS), "reading b.ts", "then the latest step shows");
 });
+
+test("clicking an agent's row in the widget opens it; the header or hint opens the list", async () => {
+	const { widgetClick } = await import("../src/ui/widget.ts");
+	const agents = [{ info: { name: "auth-review" } }, { info: { name: "tests" } }] as never;
+	const opened: (string | undefined)[] = [];
+	const event = (type: "press" | "click", y: number) =>
+		({ type, button: "left", x: 5, y, screenX: 5, screenY: y, width: 100, height: 4, shift: false, alt: false, ctrl: false }) as const;
+	for (const y of [2, 0, 3]) {
+		assert.ok(widgetClick(event("press", y), agents, (name) => opened.push(name))?.handled);
+		widgetClick(event("click", y), agents, (name) => opened.push(name));
+	}
+	assert.deepEqual(opened, ["tests", undefined, undefined]);
+	assert.equal(widgetClick(event("click", 4), agents, (name) => opened.push(name)), undefined, "below the widget");
+});

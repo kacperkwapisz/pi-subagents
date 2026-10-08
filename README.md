@@ -29,11 +29,21 @@ races; checking the tests"), shown next to their name with the current step afte
 can also set how much each agent thinks (`off` to `max`), for example little for a quick lookup
 and a lot for a hard review.
 
+Agents normally start with only their task. For work that depends on the conversation, such as
+"review what we just changed", the model can start one with a copy of the conversation instead
+(without your session's system prompt; the agent has its own). That costs more tokens, so it is
+used only when needed.
+
 When the model starts agents in the background and carries on, their results come back on
 their own: you get a notification, and the main agent picks up the answer in its next turn.
+Waiting has a limit too: after 5 minutes the main agent gets a check-in with how far each agent
+got and decides whether to wait longer, steer it or stop it. The agents keep working meanwhile,
+and Pi's working line says which ones it is waiting for.
 
-Press `←` in an empty editor, or run `/agents`, to open the agents view: your agents on the
-left, the selected one's live work on the right, and a box to steer it.
+Press `←` in an empty editor or Ctrl+Shift+A, or run `/agents`, to open the agents view: your
+agents on the left, the selected one's live work on the right, and a box to steer it. In Pi's
+fullscreen mode (the default) you can also click a row in the list above the editor to open that
+agent, click agents in the view to switch, and scroll with the mouse wheel.
 
 | Key | |
 |---|---|
@@ -44,6 +54,9 @@ left, the selected one's live work on the right, and a box to steer it.
 | Ctrl+C | Interrupt its current run (the agent stays) |
 | Ctrl+X twice | Stop the agent |
 | Esc | Back to the chat |
+
+Moving, paging and closing follow your own key bindings (`tui.select.*` in
+`~/.pi/agent/keybindings.json`), and the hints show the keys you use.
 
 When an extension inside an agent asks something (a confirmation, a choice), the question
 shows up in this view; with the view closed it opens as a normal Pi dialog.
@@ -74,11 +87,13 @@ replace included ones with the same name.
 ## How it works
 
 Each agent is `pi --mode rpc` started with your Pi, model and thinking level. Its session file
-is kept in `~/.pi/agent/subagents/`. Agents end when you stop them or quit Pi.
+is kept in `~/.pi/agent/subagents/`. Agents end when they close after finishing, when you stop
+them, or when you quit Pi.
 
 For the model there are five tools: `agent_start` (one or more agents; waits for their answers
 unless told not to; per agent you can set its type, model, thinking level and how long it stays
-open after finishing), `agent_wait`, `agent_send`, `agent_list` and `agent_stop`.
+open after finishing, and whether it starts with the conversation), `agent_wait` (both wait up to
+a check-in time), `agent_send`, `agent_list` and `agent_stop`.
 
 ## For other extensions
 

@@ -249,3 +249,26 @@ test("the user stopping a running background agent is reported; a stop the model
 		await manager.stopAll();
 	}
 });
+
+const until = async (check: () => boolean, ms = 20_000) => {
+	const end = Date.now() + ms;
+	while (!check()) {
+		if (Date.now() > end) throw new Error("timed out");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+};
+
+test("an interrupted background run is reported as interrupted, not as finished", { timeout: 60_000 }, async () => {
+	const { manager, context } = setup("slow");
+	const finishes: string[] = [];
+	manager.onFinish((agent, event) => finishes.push(`${agent.info.name}:${event.detached}:${event.interrupted}`));
+	try {
+		const agent = await manager.start({ task: "long", name: "busy" }, context);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		await agent.abort();
+		await until(() => finishes.length > 0);
+		assert.deepEqual(finishes, ["busy:true:true"]);
+	} finally {
+		await manager.stopAll();
+	}
+});

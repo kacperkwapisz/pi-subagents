@@ -2,6 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type QuestionHandler, Subagent } from "./agent.ts";
 import type { AgentType } from "./agent-types.ts";
+import { type conversationSnapshot, FROM_CONVERSATION, writeConversation } from "./context.ts";
 import { PROGRESS_TOOL } from "./progress.ts";
 import { type PiCommand, RpcChild } from "./rpc.ts";
 
@@ -26,6 +27,8 @@ export interface StartRequest {
 	thinking?: string;
 	/** How long it stays open after finishing; DEFAULT_KEEP_OPEN_MS when absent, 0 closes at once. */
 	keepOpenMs?: number;
+	/** "conversation" starts it with a copy of the main conversation; "fresh" (default) with only the task. */
+	context?: "fresh" | "conversation";
 }
 
 /** Pi's thinking levels; Pi lowers one a model can't do to the nearest it supports. */
@@ -37,6 +40,8 @@ export interface StartContext {
 	model?: string;
 	thinking?: string;
 	types: AgentType[];
+	/** The main conversation, for agents that start from it. */
+	conversation?: () => ReturnType<typeof conversationSnapshot>;
 }
 
 export interface ManagerOptions {
@@ -58,6 +63,8 @@ export interface FinishEvent {
 	detached: boolean;
 	/** The user stopped it (in the agents view) before it finished. */
 	stoppedByUser: boolean;
+	/** Its run was interrupted (Esc in the main session, or Ctrl+C in the agents view). */
+	interrupted?: boolean;
 }
 
 /** All subagents of one Pi session. */
@@ -112,6 +119,8 @@ export class AgentManager {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		const sessionFile = join(dir, `${name}.jsonl`);
 		writeFileSync(sessionFile, "", { mode: 0o600 });
+		const withConversation = request.context === "conversation" && !!context.conversation;
+		if (withConversation) writeConversation(sessionFile, context.cwd, context.conversation!());
 
 		const model = request.model ?? type.model ?? context.model;
 		if (request.thinking && !(THINKING_LEVELS as readonly string[]).includes(request.thinking)) {
@@ -138,18 +147,18 @@ export class AgentManager {
 		});
 		const keepOpenMs = Math.min(MAX_KEEP_OPEN_MS, Math.max(0, request.keepOpenMs ?? DEFAULT_KEEP_OPEN_MS));
 		const agent = new Subagent(
-			{ name, type: type.name, task: request.task, model: model ?? "", thinking, sessionFile },
+			{ name, type: type.name, task: request.task, model: model ?? "", thinking, sessionFile, withConversation },
 			child,
 			this.options.askQuestion,
 			keepOpenMs,
 		);
 		agent.onChange(() => this.changed());
-		agent.onSettled((detached) => this.finished(agent, { detached, stoppedByUser: false }));
+		agent.onSettled((detached, interrupted) => this.finished(agent, { detached, stoppedByUser: false, interrupted }));
 		this.agents.set(name, agent);
 		child.start();
 		this.changed();
 		try {
-			await agent.start(request.task);
+			await agent.start(request.task, withConversation ? FROM_CONVERSATION + request.task : request.task);
 		} catch (error) {
 			await agent.stop();
 			throw error;

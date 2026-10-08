@@ -28,6 +28,8 @@ export interface AgentInfo {
 	model: string;
 	thinking?: string;
 	sessionFile: string;
+	/** It started with a copy of the main conversation instead of a fresh context. */
+	withConversation?: boolean;
 }
 
 /** Called for questions from extensions inside the subagent; resolve with the user's answer. */
@@ -119,7 +121,7 @@ export class Subagent {
 	private readonly child: RpcChild;
 	private readonly listeners = new Set<() => void>();
 	private readonly settleWaiters = new Set<() => void>();
-	private readonly settleListeners = new Set<(detached: boolean) => void>();
+	private readonly settleListeners = new Set<(detached: boolean, interrupted: boolean) => void>();
 	private currentText?: Extract<TranscriptItem, { kind: "text" }>;
 	private currentThinking?: Extract<TranscriptItem, { kind: "thinking" }>;
 	private lastAssistant?: { stopReason?: string; errorMessage?: string; text: string };
@@ -180,10 +182,11 @@ export class Subagent {
 	}
 
 	/** Starts the first task. */
-	async start(task: string): Promise<void> {
+	/** `prompt` is what the model gets when it differs from the task shown to the user. */
+	async start(task: string, prompt = task): Promise<void> {
 		this.transcript.push({ kind: "prompt", text: task, via: "task" });
 		this.beginRun();
-		await this.child.send({ type: "prompt", message: task });
+		await this.child.send({ type: "prompt", message: prompt });
 		void this.readState(); // informational; starting doesn't wait for it
 	}
 
@@ -251,14 +254,14 @@ export class Subagent {
 		return this.settleWaiters.size > 0;
 	}
 
-	/** Called whenever a run ends; `detached` when nobody was waiting for it. */
-	onSettled(listener: (detached: boolean) => void): () => void {
+	/** Called whenever a run ends; `detached` when nobody was waiting for it, `interrupted` when aborted. */
+	onSettled(listener: (detached: boolean, interrupted: boolean) => void): () => void {
 		this.settleListeners.add(listener);
 		return () => this.settleListeners.delete(listener);
 	}
 
-	private reportSettled(detached: boolean): void {
-		for (const listener of this.settleListeners) listener(detached);
+	private reportSettled(detached: boolean, interrupted = false): void {
+		for (const listener of this.settleListeners) listener(detached, interrupted);
 	}
 
 	private beginRun(): void {
@@ -400,7 +403,7 @@ export class Subagent {
 		const detached = !this.waitedOn;
 		this.wakeWaiters();
 		this.scheduleClose();
-		this.reportSettled(detached);
+		this.reportSettled(detached, aborted);
 	}
 
 	/** One-off by default: a finished agent closes after its keep-open time unless given more work. */

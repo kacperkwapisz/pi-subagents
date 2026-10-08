@@ -1,5 +1,18 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, type Focusable, Input, Key, matchesKey, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	type Focusable,
+	getKeybindings,
+	Input,
+	Key,
+	type KeybindingsManager,
+	matchesKey,
+	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { Subagent } from "../agent.ts";
 import type { AgentManager } from "../manager.ts";
 import type { PendingQuestion, Questions } from "../questions.ts";
@@ -11,6 +24,25 @@ const FRAME_MS = 100;
 const FLASH_MS = 2500;
 /** Below this width the agent list is hidden and ↑↓ still switch agents. */
 const SIDE_BY_SIDE_WIDTH = 90;
+
+/** Where things were drawn last, for mouse clicks and the wheel. */
+interface Layout {
+	sideBySide: boolean;
+	listWidth: number;
+	bodyTop: number;
+	bodyHeight: number;
+	/** Agent name for each body row of the list. */
+	listRows: (string | undefined)[];
+}
+
+/** "pageUp" → "PgUp", "alt+enter" → "Alt+Enter", "up" → "↑". */
+export function keyLabel(key: string): string {
+	const names: Record<string, string> = { up: "↑", down: "↓", left: "←", right: "→", pageup: "PgUp", pagedown: "PgDn", escape: "Esc", enter: "Enter" };
+	return key
+		.split("+")
+		.map((part) => names[part.toLowerCase()] ?? (part.length === 1 ? part.toUpperCase() : part[0]!.toUpperCase() + part.slice(1)))
+		.join("+");
+}
 
 interface Scroll {
 	/** Following the newest output. */
@@ -24,6 +56,8 @@ export interface BrowserOptions {
 	questions: Questions;
 	theme: Theme;
 	tui: TUI;
+	/** Pi's key bindings; the user's own bindings for moving, paging and closing apply here. */
+	keybindings?: KeybindingsManager;
 	/** Agent to show first. */
 	initial?: string;
 	close: () => void;
@@ -48,7 +82,9 @@ export class AgentsBrowser implements Component, Focusable {
 	private readonly questions: Questions;
 	private readonly theme: Theme;
 	private readonly tui: TUI;
+	private readonly keys: KeybindingsManager;
 	private readonly close: () => void;
+	private layout?: Layout;
 	private readonly transcripts: TranscriptRenderer;
 	private readonly steerInput = new Input({ prompt: "❯ " });
 	private readonly answerInput = new Input({ prompt: "❯ " });
@@ -67,6 +103,7 @@ export class AgentsBrowser implements Component, Focusable {
 		this.questions = options.questions;
 		this.theme = options.theme;
 		this.tui = options.tui;
+		this.keys = options.keybindings ?? getKeybindings();
 		this.close = options.close;
 		this.selected = options.initial ?? options.manager.list().find((agent) => agent.busy)?.info.name ?? options.manager.list()[0]?.info.name;
 		this.transcripts = new TranscriptRenderer(options.theme);
@@ -132,21 +169,31 @@ export class AgentsBrowser implements Component, Focusable {
 		}
 	}
 
+	private key(id: string, ...fallback: string[]): string[] {
+		const keys = this.keys.getKeys(id as never) as string[];
+		return keys.length ? keys : fallback;
+	}
+
+	private is(data: string, id: string, ...fallback: string[]): boolean {
+		return this.key(id, ...fallback).some((key) => matchesKey(data, key as never));
+	}
+
 	private handleKey(data: string): void {
 		const question = this.question();
-		if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
-			this.select(matchesKey(data, Key.up) ? -1 : 1);
-		} else if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown)) {
-			this.page(matchesKey(data, Key.pageUp) ? 1 : -1);
+		if (matchesKey(data, Key.ctrl("c"))) {
+			// Ctrl+C interrupts the agent here; it is never "close" even where cancel is bound to it.
+			if (!question) this.interrupt();
+		} else if (this.is(data, "tui.select.up", "up") || this.is(data, "tui.select.down", "down")) {
+			this.select(this.is(data, "tui.select.up", "up") ? -1 : 1);
+		} else if (this.is(data, "tui.select.pageUp", "pageUp") || this.is(data, "tui.select.pageDown", "pageDown")) {
+			this.page(this.is(data, "tui.select.pageUp", "pageUp") ? 1 : -1);
 		} else if (question) {
 			this.handleAnswerKey(question, data);
-		} else if (matchesKey(data, Key.escape)) {
+		} else if (this.is(data, "tui.select.cancel", "escape")) {
 			this.close();
 			return;
-		} else if (matchesKey(data, Key.alt("enter"))) {
+		} else if (this.is(data, "app.message.followUp", "alt+enter")) {
 			this.sendMessage(this.steerInput.getValue(), true);
-		} else if (matchesKey(data, Key.ctrl("c"))) {
-			this.interrupt();
 		} else if (matchesKey(data, Key.ctrl("x"))) {
 			this.stop();
 		} else {
@@ -166,12 +213,52 @@ export class AgentsBrowser implements Component, Focusable {
 	}
 
 	private page(direction: number): void {
+		this.scrollBy(direction * Math.max(1, this.lastBodyHeight - 2));
+	}
+
+	/** Positive scrolls up (back in time), negative down towards the newest output. */
+	private scrollBy(lines: number): void {
 		const agent = this.current();
 		if (!agent) return;
 		const state = this.scroll.get(agent.info.name) ?? { follow: true, offset: 0 };
-		const step = Math.max(1, this.lastBodyHeight - 2);
-		const offset = Math.max(0, state.offset + direction * step);
+		const offset = Math.max(0, state.offset + lines);
 		this.scroll.set(agent.info.name, { follow: offset === 0, offset });
+	}
+
+	// ----- mouse (fullscreen mode) -----------------------------------------------------------
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		try {
+			return this.handlePointer(event);
+		} catch {
+			return { handled: true };
+		}
+	}
+
+	private handlePointer(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		const layout = this.layout;
+		if (!layout) return undefined;
+		const row = event.y - layout.bodyTop;
+		const inBody = row >= 0 && row < layout.bodyHeight;
+		const inList = layout.sideBySide && event.x < layout.listWidth;
+		if (event.type === "wheel") {
+			// Always handled, so the chat behind the browser never scrolls.
+			const delta = event.wheelDelta ?? 0;
+			if (inList && inBody) this.select(delta < 0 ? -1 : 1);
+			else this.scrollBy(-delta);
+			this.syncInputFocus();
+			return { handled: true };
+		}
+		if (event.button !== "left" || !(inList && inBody)) return undefined;
+		const name = layout.listRows[row];
+		if (event.type === "press") return { handled: true, render: false };
+		if (event.type === "click" && name) {
+			this.selected = name;
+			this.confirmStop = undefined;
+			this.syncInputFocus();
+			return { handled: true };
+		}
+		return undefined;
 	}
 
 	private sendMessage(text: string, followUp: boolean): void {
@@ -259,6 +346,13 @@ export class AgentsBrowser implements Component, Focusable {
 
 		const detail = agent ? this.renderDetail(agent, detailWidth, bodyHeight) : [t.fg("muted", "No agents yet. They appear here when the model starts some.")];
 		const list = sideBySide ? this.renderList(agents, listWidth) : [];
+		this.layout = {
+			sideBySide,
+			listWidth,
+			bodyTop: lines.length,
+			bodyHeight,
+			listRows: sideBySide ? agents.flatMap((each) => [each.info.name, each.info.name]) : [],
+		};
 		for (let row = 0; row < bodyHeight; row++) {
 			const right = pad(detail[row] ?? "", detailWidth);
 			lines.push(sideBySide ? `${pad(list[row] ?? "", listWidth)} ${t.fg("border", "│")} ${right}` : ` ${right}`);
@@ -282,7 +376,7 @@ export class AgentsBrowser implements Component, Focusable {
 		const index = agents.findIndex((agent) => agent === this.current());
 		const position = width < SIDE_BY_SIDE_WIDTH && agents.length > 1 ? t.fg("dim", `  ‹ ${index + 1}/${agents.length} ›`) : "";
 		const left = ` ${t.fg("accent", t.bold("Agents"))}  ${counts.join(t.fg("dim", " · "))}${position}`;
-		return fitLine(left, t.fg("dim", "Esc close "), width);
+		return fitLine(left, t.fg("dim", `${keyLabel(this.key("tui.select.cancel", "escape")[0] ?? "escape")} close `), width);
 	}
 
 	private renderList(agents: Subagent[], width: number): string[] {
@@ -323,7 +417,7 @@ export class AgentsBrowser implements Component, Focusable {
 		const offset = scroll.follow ? 0 : Math.min(scroll.offset, Math.max(0, transcript.length - viewport));
 		const end = transcript.length - offset;
 		const visible = transcript.slice(Math.max(0, end - viewport), end);
-		if (offset > 0) visible[visible.length - 1] = t.fg("dim", `↓ ${offset} more lines · PgDn to follow`);
+		if (offset > 0) visible[visible.length - 1] = t.fg("dim", `↓ ${offset} more lines · ${keyLabel(this.key("tui.select.pageDown", "pageDown")[0] ?? "pageDown")} to follow`);
 		return [header, t.fg("dim", "─".repeat(width)), ...visible];
 	}
 
@@ -355,9 +449,14 @@ export class AgentsBrowser implements Component, Focusable {
 		const input = this.steerInput.getValue() ? (this.steerInput.render(width - 2)[0] ?? "") : `${t.fg("accent", "❯")} ${t.fg("dim", placeholder)}`;
 		const flash = this.flash && this.flash.until > Date.now() ? this.flash.text : undefined;
 		if (!flash) this.flash = undefined;
+		const label = (id: string, fallback: string) => keyLabel(this.key(id, fallback)[0] ?? fallback);
 		const hints = flash
 			? t.fg("warning", ` ${flash}`)
-			: t.fg("dim", " Enter steer · Alt+Enter follow-up · ↑↓ agent · PgUp/PgDn scroll · Ctrl+C interrupt · Ctrl+X stop");
+			: t.fg(
+					"dim",
+					` Enter steer · ${label("app.message.followUp", "alt+enter")} follow-up · ${label("tui.select.up", "up")}${label("tui.select.down", "down")} agent · ` +
+						`${label("tui.select.pageUp", "pageUp")}/${label("tui.select.pageDown", "pageDown")} scroll · Ctrl+C interrupt · Ctrl+X stop`,
+				);
 		return [` ${input}`, truncateToWidth(hints, width)];
 	}
 }

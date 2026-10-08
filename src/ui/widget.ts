@@ -1,5 +1,5 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
+import type { TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { Subagent } from "../agent.ts";
 import type { AgentManager } from "../manager.ts";
 import { safeLines } from "./safe.ts";
@@ -54,8 +54,30 @@ export function renderAgentsWidget(agents: Subagent[], theme: Theme, width: numb
 		const left = `${branch} ${stateIcon(theme, agent.state, frame)} ${typePill(theme, agent.info.type)} ${theme.bold(agent.info.name)}  ${activityText(theme, agent)}`;
 		lines.push(fitLine(left, metrics(theme, agent, withModel), width));
 	});
-	lines.push(theme.fg("dim", "← or /agents to watch and steer"));
+	lines.push(theme.fg("dim", `${openHint} to watch and steer`));
 	return lines;
+}
+
+let openHint = "← or /agents";
+/** How the widget says to open the browser (set once the shortcut is known). */
+export function setOpenHint(hint: string): void {
+	openHint = hint;
+}
+
+/**
+ * In fullscreen mode a click on an agent's row opens it in the browser; a click on the header
+ * or the hint opens the browser. Rows follow renderAgentsWidget: header, one per agent, hint.
+ */
+export function widgetClick(
+	event: TuiMouseEvent,
+	agents: Subagent[],
+	open: (name?: string) => void,
+): TuiMouseEventResult | undefined {
+	if (event.button !== "left" || event.y < 0 || event.y > agents.length + 1) return undefined;
+	if (event.type === "press") return { handled: true, render: false };
+	if (event.type !== "click") return undefined;
+	open(agents[event.y - 1]?.info.name);
+	return { handled: true };
 }
 
 /**
@@ -65,15 +87,17 @@ export function renderAgentsWidget(agents: Subagent[], theme: Theme, width: numb
 export class AgentsWidget {
 	private readonly manager: AgentManager;
 	private readonly context: () => ExtensionContext | undefined;
+	private readonly open: (name?: string) => void;
 	private readonly hidden = new WeakSet<Subagent>();
 	private tui?: TUI;
 	private installed = false;
 	private frame = 0;
 	private ticker?: ReturnType<typeof setInterval>;
 
-	constructor(manager: AgentManager, context: () => ExtensionContext | undefined) {
+	constructor(manager: AgentManager, context: () => ExtensionContext | undefined, open: (name?: string) => void = () => {}) {
 		this.manager = manager;
 		this.context = context;
+		this.open = open;
 		manager.onChange(() => this.update());
 	}
 
@@ -103,6 +127,13 @@ export class AgentsWidget {
 					this.tui = tui;
 					return {
 						render: (width: number) => safeLines(() => renderAgentsWidget(this.visible(), theme, width, this.frame), width),
+						handleMouse: (event: TuiMouseEvent) => {
+							try {
+								return widgetClick(event, this.visible(), this.open);
+							} catch {
+								return undefined;
+							}
+						},
 						invalidate() {},
 					};
 				},

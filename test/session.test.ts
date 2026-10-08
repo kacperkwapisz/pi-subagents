@@ -26,7 +26,11 @@ const toolResults = (context: Context) =>
 		.filter((m) => m.role === "toolResult")
 		.map((m) => (m.content as { type: string; text?: string }[]).map((c) => c.text ?? "").join(""));
 
-async function startSession(script: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], extra?: ExtensionFactory) {
+async function startSession(
+	script: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0],
+	extra?: ExtensionFactory,
+	childScript = "echo",
+) {
 	const dir = mkdtempSync(join(tmpdir(), "psa-session-"));
 	writeFileSync(join(dir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "x" } }));
 	// The main conversation's model; subagents inherit "faux/faux-1" and get their own scripted copy.
@@ -44,7 +48,7 @@ async function startSession(script: Parameters<ReturnType<typeof fauxProvider>["
 					sessionDir: () => join(dir, "subagents"),
 					pi: { command: process.execPath, args: [CLI] },
 					extraArgs: ["--no-extensions", "-e", FIXTURE, "--no-skills", "--no-prompt-templates", "--no-context-files"],
-					env: { PI_CODING_AGENT_DIR: dir, SCRIPT: "echo" },
+					env: { PI_CODING_AGENT_DIR: dir, SCRIPT: childScript },
 				},
 				(created) => (manager = created),
 			),
@@ -194,6 +198,86 @@ test("agents someone waits for add no extra message", { timeout: 90_000 }, async
 		await session.prompt("Run one agent and wait.");
 		await new Promise((resolve) => setTimeout(resolve, 1000));
 		assert.equal(main.state.callCount, 2);
+	} finally {
+		await close();
+	}
+});
+
+const lastText = (context: { messages: unknown[] }) => {
+	const last = context.messages.at(-1) as { content: unknown };
+	return typeof last.content === "string" ? last.content : (last.content as { text?: string }[]).map((part) => part.text ?? "").join("");
+};
+
+test("an agent can start from a copy of the conversation, without the call that is still running", { timeout: 90_000 }, async () => {
+	let answer = "";
+	const { session, close } = await startSession(
+		[
+			fauxAssistantMessage("I fixed the bug in auth.ts."),
+			fauxAssistantMessage(fauxToolCall("agent_start", { agents: [{ task: "Review the fix", name: "review", context: "conversation" }] })),
+			(context) => {
+				answer = toolResults(context).at(-1) ?? "";
+				return fauxAssistantMessage("ok");
+			},
+		],
+		undefined,
+		"context",
+	);
+	try {
+		await session.prompt("Fix the auth bug.");
+		await session.prompt("Now get it reviewed.");
+		// The two user turns, the first answer, then the task: 4 messages, no dangling tool call.
+		assert.match(answer, /## review \(worker\)\nSaw 4 messages: Fix the auth bug\. \| Now get it reviewed\. \| You are a subagent started from the conversation above/);
+	} finally {
+		await close();
+	}
+});
+
+test("a fresh agent sees only its task", { timeout: 90_000 }, async () => {
+	let answer = "";
+	const { session, close } = await startSession(
+		[
+			fauxAssistantMessage(fauxToolCall("agent_start", { agents: [{ task: "Look around", name: "fresh" }] })),
+			(context) => {
+				answer = toolResults(context).at(-1) ?? "";
+				return fauxAssistantMessage("ok");
+			},
+		],
+		undefined,
+		"context",
+	);
+	try {
+		await session.prompt("Start an agent.");
+		assert.match(answer, /Saw 1 messages: Look around$/);
+	} finally {
+		await close();
+	}
+});
+
+test("a long wait checks in; the agent keeps working and reports back on its own", { timeout: 90_000 }, async () => {
+	let checkIn = "";
+	let later = "";
+	const { session, close, main } = await startSession(
+		[
+			fauxAssistantMessage(fauxToolCall("agent_start", { agents: [{ task: "long job", name: "slowpoke" }], checkIn: 1 })),
+			(context) => {
+				checkIn = toolResults(context).at(-1) ?? "";
+				return fauxAssistantMessage("It's still going; I'll wait for it to report back.");
+			},
+			(context) => {
+				later = lastText(context);
+				return fauxAssistantMessage("Got it.");
+			},
+		],
+		undefined,
+		"slow",
+	);
+	try {
+		await session.prompt("Run a long job.");
+		assert.match(checkIn, /^## slowpoke \(worker\): still working, \d+s so far\nNow: /);
+		assert.match(checkIn, /They keep working and report back on their own/);
+		await until(() => later !== "", 30_000);
+		assert.match(later, /Agent slowpoke finished in the background\.\n\n## slowpoke \(worker\)\nword word/);
+		await until(() => main.state.callCount === 3);
 	} finally {
 		await close();
 	}

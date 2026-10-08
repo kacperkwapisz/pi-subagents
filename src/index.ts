@@ -10,7 +10,10 @@ import { answerOf, registerTools } from "./tools.ts";
 import { safely } from "./ui/safe.ts";
 import { type AgentSnapshot, renderAgentsResult, snapshot } from "./ui/tool-render.ts";
 import { AgentsBrowser } from "./ui/browser.ts";
-import { AgentsWidget } from "./ui/widget.ts";
+import { AgentsWidget, setOpenHint } from "./ui/widget.ts";
+
+/** Opens the agents view from anywhere (← also does in an empty editor). */
+export const OPEN_SHORTCUT = "ctrl+shift+a";
 
 /** Asks the user a question that an extension inside a subagent asked. */
 async function askInParent(
@@ -60,7 +63,14 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 			...overrides,
 		});
 		onManager?.(manager);
-		const widget = new AgentsWidget(manager, () => current);
+		const widget = new AgentsWidget(
+			manager,
+			() => current,
+			(name) => {
+				if (current) void openBrowser(current, name);
+			},
+		);
+		setOpenHint("← or Ctrl+Shift+A");
 
 		pi.events.on(QUERY_EVENT, (data) => {
 			const reply = (data as { reply?: unknown } | undefined)?.reply;
@@ -69,9 +79,15 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 
 		// A background agent (started without waiting) finished: tell the user and the main agent,
 		// which starts its next turn with the result. A wait in progress reports the result itself.
-		manager.onFinish((agent, { detached, stoppedByUser }) => {
+		manager.onFinish((agent, { detached, stoppedByUser, interrupted }) => {
 			if (!detached) return;
 			const name = agent.info.name;
+			// The user interrupted it (or the wait for it): they are in control, so no new turn
+			// and nothing in the chat; other extensions still hear that it stopped working.
+			if (interrupted) {
+				pi.events.emit(FINISHED_EVENT, { name, status: "interrupted", triggersTurn: false });
+				return;
+			}
 			const ok = agent.state === "idle";
 			if (current?.hasUI) {
 				const what = stoppedByUser ? "stopped" : ok ? "done" : agent.state;
@@ -105,7 +121,8 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 			questions.setInline(true);
 			try {
 				await ctx.ui.custom<void>(
-					(tui, theme, _keybindings, done) => new AgentsBrowser({ manager, questions, theme, tui, initial, close: () => done() }),
+					(tui, theme, keybindings, done) =>
+						new AgentsBrowser({ manager, questions, theme, tui, keybindings, initial, close: () => done() }),
 					// Full screen, so nothing from the chat shows through around it.
 					{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "center", margin: 0 } },
 				);
@@ -114,6 +131,11 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 				questions.setInline(false);
 			}
 		};
+
+		pi.registerShortcut(OPEN_SHORTCUT, {
+			description: "Watch and steer your subagents",
+			handler: (ctx) => openBrowser(ctx),
+		});
 
 		pi.registerCommand("agents", {
 			description: "Watch and steer your subagents",

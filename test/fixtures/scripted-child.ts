@@ -25,6 +25,12 @@ export default function (pi: ExtensionAPI) {
 			return fauxAssistantMessage(fauxToolCall("ls", { path: "." }));
 		}
 		if (script === "slow" && !/steer/i.test(text)) return fauxAssistantMessage("word ".repeat(100));
+		if (script === "context") {
+			// What the agent was started with (not counting Pi's system notes): every user message, oldest first.
+			const users = context.messages.filter((m) => m.role === "user").map((m) => lastUserText([m]).split("\n")[0]);
+			const seen = context.messages.filter((m) => m.role !== "system").length;
+			return fauxAssistantMessage(`Saw ${seen} messages: ${users.join(" | ")}`);
+		}
 		return fauxAssistantMessage(`Done: ${text}`);
 	};
 	faux.setResponses(Array.from({ length: 20 }, () => reply));

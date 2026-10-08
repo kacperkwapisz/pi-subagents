@@ -3,7 +3,9 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { Subagent } from "./agent.ts";
 import { discoverAgentTypes } from "./agent-types.ts";
+import { conversationSnapshot } from "./context.ts";
 import { type AgentManager, DEFAULT_KEEP_OPEN_MS, MAX_AGENTS, MAX_KEEP_OPEN_MS, THINKING_LEVELS } from "./manager.ts";
+import { formatDuration } from "./ui/format.ts";
 import { safely } from "./ui/safe.ts";
 import { type AgentsDetails, renderAgentsResult, renderStartCall, renderWaitCall, snapshot } from "./ui/tool-render.ts";
 
@@ -25,29 +27,83 @@ function text(value: string, agents: Subagent[] = []) {
 	return { content: [{ type: "text" as const, text: value }], details };
 }
 
+/** For a running agent at check-in time: how far it got, so the main model can decide what to do. */
+export function checkInOf(agent: Subagent): string {
+	const lines = [`## ${agent.info.name} (${agent.info.type}): still working, ${formatDuration(agent.elapsedMs)} so far`];
+	if (agent.status) lines.push(`Says: ${agent.status}`);
+	lines.push(`Now: ${agent.step()}`);
+	const latest = agent.transcript.findLast((item) => item.kind === "text" && item.text.trim());
+	if (latest && latest.kind === "text") {
+		const tail = latest.text.trim();
+		lines.push(`Latest output: ${tail.length > CHECK_IN_OUTPUT ? `…${tail.slice(-CHECK_IN_OUTPUT)}` : tail}`);
+	}
+	return lines.join("\n");
+}
+
+const CHECK_IN_OUTPUT = 600;
 const PROGRESS_MS = 250;
+export const DEFAULT_CHECK_IN_S = 300;
+const MAX_CHECK_IN_S = 3600;
+const STILL_WORKING =
+	"They keep working and report back on their own when they finish. Use agent_wait to wait longer, agent_send to steer them, or agent_stop to stop them.";
+
+function workingMessage(agents: Subagent[]): string {
+	const busy = agents.filter((agent) => agent.busy).map((agent) => agent.info.name);
+	if (busy.length === 0) return "Collecting answers";
+	return busy.length <= 3 ? `Waiting for ${busy.join(", ")}` : `Waiting for ${busy.length} agents`;
+}
 
 /**
- * Waits for agents to finish while showing their progress in the tool's output. Esc
- * interrupts their current runs but keeps the agents.
+ * Waits for agents to finish while showing their progress in the tool's output, up to the
+ * check-in time. Esc interrupts their current runs but keeps the agents. Agents still running
+ * at check-in keep going; the wait just stops, and they report back on their own later.
  */
 async function waitFor(
 	agents: Subagent[],
 	signal: AbortSignal | undefined,
 	onUpdate: AgentToolUpdateCallback<AgentsDetails> | undefined,
+	ctx: ExtensionContext | undefined,
+	checkInSeconds = DEFAULT_CHECK_IN_S,
 ): Promise<void> {
-	const progress = () => onUpdate?.({ content: [{ type: "text", text: "Agents working…" }], details: { agents: agents.map(snapshot) } });
-	const onAbort = () => void Promise.all(agents.map((agent) => agent.abort().catch(() => {})));
+	const stopWaiting = new AbortController();
+	const working = ctx?.hasUI ? (message?: string) => ctx.ui.setWorkingMessage(message) : () => {};
+	const progress = () => {
+		working(workingMessage(agents));
+		onUpdate?.({ content: [{ type: "text", text: "Agents working…" }], details: { agents: agents.map(snapshot) } });
+	};
+	const onAbort = () => {
+		stopWaiting.abort();
+		void Promise.all(agents.map((agent) => agent.abort().catch(() => {})));
+	};
+	if (signal?.aborted) onAbort();
 	signal?.addEventListener("abort", onAbort, { once: true });
+	const checkIn = setTimeout(() => stopWaiting.abort(), Math.min(MAX_CHECK_IN_S, Math.max(1, checkInSeconds)) * 1000);
 	progress();
 	const timer = setInterval(progress, PROGRESS_MS);
 	try {
-		await Promise.all(agents.map((agent) => agent.whenSettled(signal)));
+		await Promise.all(agents.map((agent) => agent.whenSettled(stopWaiting.signal)));
 	} finally {
 		clearInterval(timer);
+		clearTimeout(checkIn);
 		signal?.removeEventListener("abort", onAbort);
+		working();
 	}
 }
+
+/** Answers for finished agents, check-ins for running ones. */
+function report(agents: Subagent[], extra: string[] = []): string {
+	const parts = [...extra, ...agents.map((agent) => (agent.busy ? checkInOf(agent) : answerOf(agent)))];
+	if (agents.some((agent) => agent.busy)) parts.push(STILL_WORKING);
+	return parts.join("\n\n");
+}
+
+const checkInParameter = Type.Optional(
+	Type.Number({
+		minimum: 1,
+		maximum: MAX_CHECK_IN_S,
+		description: `Seconds to wait before checking in (default ${DEFAULT_CHECK_IN_S}). Agents still running then keep working; you get how far they got.`,
+	}),
+);
 
 function resultText(result: { content: { type: string; text?: string }[] }): string {
 	return result.content.map((part) => part.text ?? "").join("\n");
@@ -71,7 +127,8 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 			`By default this waits and returns their answers; with wait: false it returns right away so you can keep working, then use agent_wait.`,
 		promptSnippet: "agent_start: delegate tasks to subagents that run in parallel with their own context",
 		promptGuidelines: [
-			"Give each agent a complete, self-contained task: it has not seen this conversation.",
+			"Give each agent a complete, self-contained task: it has not seen this conversation, unless you start it with context: conversation.",
+			"Use context: conversation only when the task depends on what was said or done here (for example reviewing changes you just made); it costs more tokens.",
 			"Start independent tasks together in one agent_start call so they run in parallel.",
 			"Set thinking to match the task: low or minimal for lookups and simple edits, medium for ordinary work, high or xhigh for hard reviews, debugging and design. Leave it out to use yours.",
 			"Agents close by themselves shortly after finishing. Only set keepOpen when you will send follow-ups, and agent_stop agents you no longer need instead of leaving them open.",
@@ -90,6 +147,11 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 							description: `Seconds to stay open after finishing, for follow-ups with agent_send (default ${DEFAULT_KEEP_OPEN_MS / 1000}; 0 closes it right away).`,
 						}),
 					),
+					context: Type.Optional(
+						StringEnum(["fresh", "conversation"] as const, {
+							description: "fresh (default): starts with only the task. conversation: starts with a copy of this conversation.",
+						}),
+					),
 					thinking: Type.Optional(
 						StringEnum(THINKING_LEVELS, { description: "How much the agent thinks; yours when omitted. Lowered automatically if the model can't do it." }),
 					),
@@ -97,6 +159,7 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 				{ minItems: 1, maxItems: MAX_AGENTS },
 			),
 			wait: Type.Optional(Type.Boolean({ description: "Wait for their answers (default true)." })),
+			checkIn: checkInParameter,
 		}),
 		renderCall(args, theme) {
 			return safely(() => renderStartCall(args, theme));
@@ -110,6 +173,7 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 				model: parentModel(ctx),
 				thinking: ctx.thinkingLevel,
 				types: discoverAgentTypes(ctx.cwd, ctx.isProjectTrusted()),
+				conversation: () => conversationSnapshot(ctx.sessionManager),
 			};
 			const results = await Promise.allSettled(
 				params.agents.map(({ keepOpen, ...request }) =>
@@ -122,8 +186,8 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 				const names = started.map((agent) => agent.info.name).join(", ");
 				return text([started.length ? `Started ${names}. Use agent_wait to get their answers.` : "", ...problems].filter(Boolean).join("\n"), started);
 			}
-			await waitFor(started, signal, onUpdate);
-			return text([...problems, ...started.map(answerOf)].join("\n\n"), started);
+			await waitFor(started, signal, onUpdate, ctx, params.checkIn);
+			return text(report(started, problems), started);
 		},
 	});
 
@@ -133,6 +197,7 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 		description: "Wait for subagents to finish and return their answers. Without names, waits for every agent that is still running.",
 		parameters: Type.Object({
 			names: Type.Optional(Type.Array(Type.String(), { description: "Agents to wait for." })),
+			checkIn: checkInParameter,
 		}),
 		renderCall(args, theme) {
 			return safely(() => renderWaitCall(args, theme));
@@ -140,14 +205,14 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 		renderResult(result, options, theme) {
 			return safely(() => renderAgentsResult(result.details as AgentsDetails | undefined, resultText(result), options, theme));
 		},
-		async execute(_id, params, signal, onUpdate) {
+		async execute(_id, params, signal, onUpdate, ctx) {
 			const agents = params.names?.length
 				? params.names.map((name) => manager.get(name)).filter((agent): agent is Subagent => !!agent)
 				: manager.list().filter((agent) => agent.busy);
 			const missing = (params.names ?? []).filter((name) => !manager.get(name));
 			if (agents.length === 0) return text(missing.length ? `No agent named ${missing.join(", ")}.` : "No agents are running.");
-			await waitFor(agents, signal, onUpdate);
-			return text([...missing.map((name) => `No agent named ${name}.`), ...agents.map(answerOf)].join("\n\n"), agents);
+			await waitFor(agents, signal, onUpdate, ctx, params.checkIn);
+			return text(report(agents, missing.map((name) => `No agent named ${name}.`)), agents);
 		},
 	});
 
