@@ -1,0 +1,38 @@
+{
+  "name": "pi-subagents",
+  "version": "0.1.0",
+  "description": "Subagents for Pi you can watch and steer, each running in its own Pi process with your extensions.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Kacper Kwapisz",
+  "homepage": "https://github.com/kacperkwapisz/pi-subagents#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kacperkwapisz/pi-subagents.git"
+  },
+  "keywords": ["pi-package", "pi-extension", "subagents", "agents"],
+  "files": ["src", "agents", "README.md"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-tui": "1.1.0",
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.0"
+  }
+}
