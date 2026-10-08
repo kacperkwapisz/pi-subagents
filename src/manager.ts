@@ -2,6 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type QuestionHandler, Subagent } from "./agent.ts";
 import type { AgentType } from "./agent-types.ts";
+import { PROGRESS_TOOL } from "./progress.ts";
 import { type PiCommand, RpcChild } from "./rpc.ts";
 
 /** Set in every subagent's environment; pi-subagents stays passive there (no nested agents yet). */
@@ -18,7 +19,12 @@ export interface StartRequest {
 	name?: string;
 	/** `provider/model`; the agent type's or the parent's when absent. */
 	model?: string;
+	/** How much the agent thinks; the agent type's or the parent's when absent. */
+	thinking?: string;
 }
+
+/** Pi's thinking levels; Pi lowers one a model can't do to the nearest it supports. */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export interface StartContext {
 	cwd: string;
@@ -85,11 +91,15 @@ export class AgentManager {
 		writeFileSync(sessionFile, "", { mode: 0o600 });
 
 		const model = request.model ?? type.model ?? context.model;
-		const thinking = type.thinking ?? context.thinking;
+		if (request.thinking && !(THINKING_LEVELS as readonly string[]).includes(request.thinking)) {
+			throw new Error(`Unknown thinking level "${request.thinking}". Use one of: ${THINKING_LEVELS.join(", ")}.`);
+		}
+		const thinking = request.thinking ?? type.thinking ?? context.thinking;
 		const args = ["--session", sessionFile];
 		if (model) args.push("--model", model);
 		if (thinking) args.push("--thinking", thinking);
-		if (type.tools) args.push("--tools", type.tools.join(","));
+		// Agent types that limit tools still get the one for reporting progress.
+		if (type.tools) args.push("--tools", [...type.tools, PROGRESS_TOOL].join(","));
 		if (type.systemPrompt.trim()) {
 			const promptFile = join(dir, `${name}.prompt.md`);
 			writeFileSync(promptFile, type.systemPrompt, { mode: 0o600 });

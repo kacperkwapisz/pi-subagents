@@ -3,7 +3,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 import type { Subagent } from "../agent.ts";
 import type { AgentManager } from "../manager.ts";
 import { safeLines } from "./safe.ts";
-import { fitLine, formatCost, formatDuration, formatModel, formatTokens, stateIcon, typePill } from "./format.ts";
+import { describeWork, fitLine, formatCost, formatDuration, formatModel, formatTokens, stateIcon, typePill } from "./format.ts";
 
 const WIDGET_KEY = "pi-subagents";
 const FRAME_MS = 100;
@@ -17,13 +17,13 @@ function activityText(theme: Theme, agent: Subagent): string {
 		case "stopped":
 			return theme.fg("muted", "stopped");
 		default:
-			return theme.fg("muted", agent.activity);
+			return describeWork(theme, agent.status, agent.step());
 	}
 }
 
 function metrics(theme: Theme, agent: Subagent, withModel: boolean): string {
 	const parts = [
-		withModel && agent.info.model ? theme.fg("dim", formatModel(agent.info.model)) : "",
+		withModel && agent.info.model ? theme.fg("dim", formatModel(agent.info.model, agent.info.thinking)) : "",
 		theme.fg("muted", formatDuration(agent.elapsedMs)),
 		theme.fg("dim", `↑${formatTokens(agent.usage.input)} ↓${formatTokens(agent.usage.output)}`),
 		theme.fg("muted", formatCost(agent.usage.cost)),

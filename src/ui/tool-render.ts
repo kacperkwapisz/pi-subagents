@@ -13,6 +13,8 @@ export interface AgentSnapshot {
 	elapsedMs: number;
 	usage: AgentUsage;
 	model: string;
+	thinking?: string;
+	status?: string;
 	answer?: string;
 	error?: string;
 }
@@ -27,10 +29,12 @@ export function snapshot(agent: Subagent): AgentSnapshot {
 		type: agent.info.type,
 		task: agent.info.task,
 		state: agent.state,
-		activity: agent.activity,
+		activity: agent.step(),
+		status: agent.status,
 		elapsedMs: agent.elapsedMs,
 		usage: { ...agent.usage },
 		model: agent.info.model,
+		thinking: agent.info.thinking,
 		answer: agent.result,
 		error: agent.error,
 	};
@@ -55,7 +59,7 @@ function summary(theme: Theme, agent: AgentSnapshot): string {
 		formatDuration(agent.elapsedMs),
 		`↑${formatTokens(agent.usage.input)} ↓${formatTokens(agent.usage.output)}`,
 		formatCost(agent.usage.cost),
-		agent.model ? formatModel(agent.model) : "",
+		agent.model ? formatModel(agent.model, agent.thinking) : "",
 	];
 	return theme.fg("dim", parts.filter(Boolean).join("  "));
 }

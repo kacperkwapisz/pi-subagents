@@ -3,7 +3,7 @@ import { type Component, type Focusable, Input, Key, matchesKey, type TUI, trunc
 import type { Subagent } from "../agent.ts";
 import type { AgentManager } from "../manager.ts";
 import type { PendingQuestion, Questions } from "../questions.ts";
-import { fitLine, formatCost, formatDuration, formatModel, formatTokens, stateIcon, typePill } from "./format.ts";
+import { describeWork, fitLine, formatCost, formatDuration, formatModel, formatTokens, stateIcon, typePill } from "./format.ts";
 import { safeLines } from "./safe.ts";
 import { TranscriptRenderer } from "./transcript.ts";
 
@@ -295,7 +295,9 @@ export class AgentsBrowser implements Component, Focusable {
 			lines.push(`${pointer} ${stateIcon(t, agent.state, this.frame)} ${name}`);
 			const status = asking
 				? t.fg("warning", "? needs your answer")
-				: t.fg(agent.state === "failed" ? "error" : "muted", agent.busy ? agent.activity : stateWord(agent));
+				: agent.busy
+					? describeWork(t, agent.status, agent.step())
+					: t.fg(agent.state === "failed" ? "error" : "muted", stateWord(agent));
 			lines.push(truncateToWidth(`    ${t.fg("dim", `${agent.info.type} ·`)} ${status}`, width, "…"));
 		}
 		return lines;
@@ -303,7 +305,7 @@ export class AgentsBrowser implements Component, Focusable {
 
 	private renderDetail(agent: Subagent, width: number, height: number): string[] {
 		const t = this.theme;
-		const model = agent.info.model ? t.fg("dim", formatModel(agent.info.model)) : "";
+		const model = agent.info.model ? t.fg("dim", formatModel(agent.info.model, agent.info.thinking)) : "";
 		const left = `${t.bold(agent.info.name)} ${typePill(t, agent.info.type)} ${model}`;
 		const numbers = [
 			`${stateIcon(t, agent.state, this.frame)} ${t.fg(agent.state === "failed" ? "error" : "muted", stateWord(agent))}`,

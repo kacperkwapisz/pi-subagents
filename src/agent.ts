@@ -1,3 +1,4 @@
+import { PROGRESS_KEY } from "./progress.ts";
 import type { RpcChild, RpcRecord, UiRequest } from "./rpc.ts";
 
 export type AgentState = "starting" | "running" | "idle" | "failed" | "stopped";
@@ -8,7 +9,9 @@ export type TranscriptItem =
 	| { kind: "text"; text: string }
 	| { kind: "thinking"; text: string }
 	| { kind: "tool"; id: string; name: string; args: Record<string, unknown>; status: "running" | "done" | "error"; output: string }
-	| { kind: "notice"; text: string; level: "info" | "warning" | "error" };
+	| { kind: "notice"; text: string; level: "info" | "warning" | "error" }
+	/** What the agent said it is working on (its report_progress calls). */
+	| { kind: "status"; text: string };
 
 export interface AgentUsage {
 	/** Input tokens, including cache reads and writes. */
@@ -31,6 +34,8 @@ export interface AgentInfo {
 export type QuestionHandler = (agent: Subagent, request: UiRequest) => Promise<{ value?: string; confirmed?: boolean; cancelled?: boolean }>;
 
 const TOOL_OUTPUT_LIMIT = 4_000;
+/** A step stays on screen at least this long, so fast tool calls don't flicker. */
+export const STEP_HOLD_MS = 1_200;
 
 function contentText(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -86,8 +91,12 @@ export class Subagent {
 	readonly info: AgentInfo;
 	readonly createdAt = Date.now();
 	state: AgentState = "starting";
-	/** What it is doing right now, e.g. "$ npm test" or "thinking". */
+	/** What it is doing right now, e.g. "$ npm test" or "thinking". Changes fast; see `step`. */
 	activity = "starting";
+	/** What the agent says it is working on, in its own words. */
+	status?: string;
+	private shownStep = "starting";
+	private shownStepAt = 0;
 	/** Usage of finished replies; see `usage` for the live total. */
 	private settledUsage: AgentUsage = { input: 0, output: 0, cost: 0 };
 	/** Usage of the reply being streamed right now. */
@@ -135,6 +144,18 @@ export class Subagent {
 		return this.activeMs + (this.runStartedAt ? Date.now() - this.runStartedAt : 0);
 	}
 
+	/**
+	 * `activity` for display: a new step replaces the shown one only after that has been on
+	 * screen for STEP_HOLD_MS, so a burst of quick tool calls reads as steps instead of flicker.
+	 */
+	step(now = Date.now()): string {
+		if (this.activity !== this.shownStep && now - this.shownStepAt >= STEP_HOLD_MS) {
+			this.shownStep = this.activity;
+			this.shownStepAt = now;
+		}
+		return this.shownStep;
+	}
+
 	get busy(): boolean {
 		return this.state === "starting" || this.state === "running";
 	}
@@ -149,6 +170,19 @@ export class Subagent {
 		this.transcript.push({ kind: "prompt", text: task, via: "task" });
 		this.beginRun();
 		await this.child.send({ type: "prompt", message: task });
+		void this.readState(); // informational; starting doesn't wait for it
+	}
+
+	/** The model and thinking level Pi actually uses (it clamps the level to what the model supports). */
+	private async readState(): Promise<void> {
+		try {
+			const state = (await this.child.send({ type: "get_state" })) as { model?: { provider?: string; id?: string }; thinkingLevel?: string };
+			if (state.model?.provider && state.model.id) this.info.model = `${state.model.provider}/${state.model.id}`;
+			if (state.thinkingLevel) this.info.thinking = state.thinkingLevel;
+			this.changed();
+		} catch {
+			// Only informational.
+		}
 	}
 
 	/** Sends more input: steers a running agent, or starts a new run on an idle one. */
@@ -253,6 +287,9 @@ export class Subagent {
 			case "compaction_start":
 				this.activity = "compacting";
 				break;
+			case "thinking_level_changed":
+				if (typeof record.level === "string") this.info.thinking = record.level;
+				break;
 			case "agent_settled":
 				this.handleSettled(record.aborted === true);
 				break;
@@ -332,6 +369,13 @@ export class Subagent {
 	}
 
 	private handleUiRequest(request: UiRequest, askQuestion: QuestionHandler): void {
+		if (request.method === "setStatus" && request.statusKey === PROGRESS_KEY) {
+			const status = typeof request.statusText === "string" ? request.statusText.trim() : "";
+			this.status = status || undefined;
+			if (status) this.transcript.push({ kind: "status", text: status });
+			this.changed();
+			return;
+		}
 		if (request.method === "notify") {
 			const level = request.notifyType === "error" || request.notifyType === "warning" ? request.notifyType : "info";
 			this.transcript.push({ kind: "notice", text: String(request.message ?? ""), level });

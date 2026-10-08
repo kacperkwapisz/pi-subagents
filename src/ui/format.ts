@@ -26,16 +26,22 @@ export function formatCost(cost: number): string {
 }
 
 /**
- * "claude-opus-5 · account 3" for pi-multi-account's extra accounts (`anthropic-account-3`),
- * just the model for a provider's own login.
+ * "claude-opus-5 · account 3 · high": the model, the account for pi-multi-account's extra
+ * accounts (`anthropic-account-3`), and the thinking level when there is one.
  */
-export function formatModel(model: string): string {
+export function formatModel(model: string, thinking?: string): string {
 	const slash = model.indexOf("/");
-	if (slash === -1) return model;
-	const provider = model.slice(0, slash);
-	const id = model.slice(slash + 1);
+	const provider = slash === -1 ? "" : model.slice(0, slash);
+	const id = slash === -1 ? model : model.slice(slash + 1);
 	const account = provider.match(/-account-(\d+)$/)?.[1];
-	return account ? `${id} · account ${account}` : id;
+	const level = thinking && thinking !== "off" ? thinking : undefined;
+	return [id, account ? `account ${account}` : "", level ?? ""].filter(Boolean).join(" · ");
+}
+
+/** What a running agent is doing: its own status first, the current step after it. */
+export function describeWork(theme: Theme, status: string | undefined, step: string): string {
+	if (!status) return theme.fg("muted", step);
+	return `${theme.fg("text", status)}${theme.fg("dim", ` · ${step}`)}`;
 }
 
 const TYPE_COLORS: Color[] = ["syntaxFunction", "syntaxKeyword", "syntaxString", "syntaxType", "mdHeading", "syntaxNumber", "accent", "success"];

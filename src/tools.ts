@@ -1,8 +1,9 @@
 import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { Subagent } from "./agent.ts";
 import { discoverAgentTypes } from "./agent-types.ts";
-import { type AgentManager, MAX_AGENTS } from "./manager.ts";
+import { type AgentManager, MAX_AGENTS, THINKING_LEVELS } from "./manager.ts";
 import { safely } from "./ui/safe.ts";
 import { type AgentsDetails, renderAgentsResult, renderStartCall, renderWaitCall, snapshot } from "./ui/tool-render.ts";
 
@@ -71,6 +72,7 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 		promptGuidelines: [
 			"Give each agent a complete, self-contained task: it has not seen this conversation.",
 			"Start independent tasks together in one agent_start call so they run in parallel.",
+			"Set thinking to match the task: low or minimal for lookups and simple edits, medium for ordinary work, high or xhigh for hard reviews, debugging and design. Leave it out to use yours.",
 			"Stop agents with agent_stop once their work is done.",
 		],
 		parameters: Type.Object({
@@ -80,6 +82,9 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 					type: Type.Optional(Type.String({ description: "Agent type; worker when omitted." })),
 					name: Type.Optional(Type.String({ description: "Short name shown to the user, e.g. auth-review." })),
 					model: Type.Optional(Type.String({ description: "provider/model, only to use a different model than yours." })),
+					thinking: Type.Optional(
+						StringEnum(THINKING_LEVELS, { description: "How much the agent thinks; yours when omitted. Lowered automatically if the model can't do it." }),
+					),
 				}),
 				{ minItems: 1, maxItems: MAX_AGENTS },
 			),
@@ -170,7 +175,9 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 				agents
 					.map((agent) => {
 						const tokens = `${agent.usage.input} in / ${agent.usage.output} out`;
-						return `${agent.info.name} (${agent.info.type}): ${agent.state}, ${agent.activity}; ${agent.info.model}; ${tokens}`;
+						const work = agent.status ? `${agent.status} (${agent.activity})` : agent.activity;
+						const thinking = agent.info.thinking && agent.info.thinking !== "off" ? `, thinking ${agent.info.thinking}` : "";
+						return `${agent.info.name} (${agent.info.type}): ${agent.state}, ${work}; ${agent.info.model}${thinking}; ${tokens}`;
 					})
 					.join("\n"),
 			);

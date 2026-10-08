@@ -4,6 +4,7 @@ import { Key, matchesKey } from "@earendil-works/pi-tui";
 import type { Subagent } from "./agent.ts";
 import { AgentManager, CHILD_ENV, type ManagerOptions } from "./manager.ts";
 import type { UiRequest } from "./rpc.ts";
+import { registerProgressTool } from "./progress.ts";
 import { Questions } from "./questions.ts";
 import { registerTools } from "./tools.ts";
 import { AgentsBrowser } from "./ui/browser.ts";
@@ -43,8 +44,11 @@ async function askInParent(
  */
 export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onManager?: (manager: AgentManager) => void) {
 	return function piSubagents(pi: ExtensionAPI) {
-		// Inside a subagent this extension stays out of the way: no nested agents yet.
-		if (process.env[CHILD_ENV]) return;
+		// Inside a subagent: only the tool for reporting progress (no nested agents yet).
+		if (process.env[CHILD_ENV]) {
+			registerProgressTool(pi);
+			return;
+		}
 
 		let current: ExtensionContext | undefined;
 		const questions = new Questions((agent, request) => askInParent(current, agent, request));

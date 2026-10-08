@@ -14,10 +14,13 @@ const lastUserText = (messages: { role: string; content: unknown }[]) => {
 
 export default function (pi: ExtensionAPI) {
 	const script = process.env.SCRIPT ?? "echo";
-	const faux = fauxProvider({ provider: "faux", models: [{ id: "faux-1" }], tokensPerSecond: script === "slow" ? 40 : undefined });
+	const faux = fauxProvider({ provider: "faux", models: [{ id: "faux-1", reasoning: true }], tokensPerSecond: script === "slow" ? 40 : undefined });
 	const reply = (context: { messages: { role: string; content: unknown }[] }) => {
 		const text = lastUserText(context.messages);
 		if (script === "fail") return fauxAssistantMessage("", { stopReason: "error", errorMessage: "You've hit your usage limit." });
+		if (script === "progress" && !context.messages.some((m) => m.role === "toolResult")) {
+			return fauxAssistantMessage(fauxToolCall("report_progress", { status: "Reading   the auth module" }));
+		}
 		if (script === "tool" && !context.messages.some((m) => m.role === "toolResult")) {
 			return fauxAssistantMessage(fauxToolCall("ls", { path: "." }));
 		}

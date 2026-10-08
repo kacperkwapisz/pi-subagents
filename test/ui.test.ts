@@ -19,6 +19,7 @@ function agent(name: string, type: string, state: Subagent["state"], activity: s
 		usage: { input: 31_200, output: 2_900, cost: 0.11 },
 		elapsedMs: 192_000,
 		busy: state === "running" || state === "starting",
+		step: () => activity,
 		...extra,
 	} as Subagent;
 }
@@ -36,6 +37,8 @@ test("numbers, times and models read compactly", () => {
 	assert.equal(formatCost(0.114), "$0.11");
 	assert.equal(formatModel("anthropic-account-3/claude-opus-5"), "claude-opus-5 · account 3");
 	assert.equal(formatModel("anthropic/claude-opus-5"), "claude-opus-5");
+	assert.equal(formatModel("anthropic-account-3/claude-opus-5", "high"), "claude-opus-5 · account 3 · high");
+	assert.equal(formatModel("anthropic/claude-opus-5", "off"), "claude-opus-5");
 });
 
 test("the widget lists agents as a tree with activity, model, time, tokens and cost", () => {
@@ -107,4 +110,23 @@ test("a failing renderer shows one line instead of ending the Pi session", () =>
 	const broken = safely(() => ({ render: () => { throw new Error("boom"); }, invalidate() {} }));
 	assert.deepEqual(broken.render(60), ["pi-subagents could not draw this: boom"]);
 	assert.deepEqual(safely(() => { throw new Error("bad"); }).render(60), ["pi-subagents could not draw this: bad"]);
+});
+
+test("a running agent shows its own status first, with the current step after it", () => {
+	const lines = renderAgentsWidget([agent("fix-auth", "worker", "running", "$ npm test", { status: "Fixing the refresh race" })], theme, 140);
+	assert.match(lines[1]!, /fix-auth {2}Fixing the refresh race · \$ npm test /);
+});
+
+test("quick steps are held on screen instead of flickering", async () => {
+	const { Subagent, STEP_HOLD_MS } = await import("../src/agent.ts");
+	const child = { onEvent: () => () => {}, onUiRequest: () => () => {}, exited: new Promise(() => {}) };
+	const agent = new Subagent({ name: "a", type: "worker", task: "t", model: "", sessionFile: "" }, child as never, async () => ({}));
+	const start = 1_000_000;
+	agent.activity = "reading a.ts";
+	assert.equal(agent.step(start), "reading a.ts");
+	agent.activity = "thinking";
+	assert.equal(agent.step(start + 200), "reading a.ts", "a new step waits");
+	agent.activity = "reading b.ts";
+	assert.equal(agent.step(start + STEP_HOLD_MS - 1), "reading a.ts");
+	assert.equal(agent.step(start + STEP_HOLD_MS), "reading b.ts", "then the latest step shows");
 });

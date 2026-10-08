@@ -21,6 +21,7 @@ function fakeAgent(name: string, state: Subagent["state"], transcript: Transcrip
 		usage: { input: 12_400, output: 800, cost: 0.04 },
 		elapsedMs: 72_000,
 		busy: state === "running",
+		step: () => (state === "running" ? "reading src/auth.ts" : "done"),
 		transcript,
 		send: async (message: string, followUp = false) => void sent.push({ message, followUp }),
 		abort: async () => {},

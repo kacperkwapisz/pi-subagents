@@ -94,6 +94,8 @@ export class TranscriptRenderer {
 				const style = (line: string) => t.fg(item.status === "error" ? "error" : "dim", line);
 				return [label, ...preview(item.output, width, style)];
 			}
+			case "status":
+				return wrapTextWithAnsi(t.fg("accent", `◆ ${item.text}`), width);
 			case "notice": {
 				const icon = item.level === "error" ? "✗" : item.level === "warning" ? "⚠" : "ℹ";
 				const color = item.level === "info" ? "muted" : item.level;

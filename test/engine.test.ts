@@ -17,7 +17,9 @@ const types: AgentType[] = [
 	{ name: "scout", description: "looks around", tools: ["read", "ls"], systemPrompt: "", source: "bundled" },
 ];
 
-function setup(script: string, answer: { confirmed?: boolean } = {}) {
+const SUBAGENTS = join(import.meta.dirname, "..", "src", "index.ts");
+
+function setup(script: string, answer: { confirmed?: boolean } = {}, withProgressTool = false) {
 	const agentDir = mkdtempSync(join(tmpdir(), "psa-agent-"));
 	writeFileSync(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "x" } }));
 	const questions: string[] = [];
@@ -28,7 +30,8 @@ function setup(script: string, answer: { confirmed?: boolean } = {}) {
 			return answer;
 		},
 		pi: { command: process.execPath, args: [CLI] },
-		extraArgs: ["--no-extensions", "-e", FIXTURE, "--no-skills", "--no-prompt-templates", "--no-context-files"],
+		// With withProgressTool the child also loads pi-subagents, as a real subagent does.
+		extraArgs: ["--no-extensions", "-e", FIXTURE, ...(withProgressTool ? ["-e", SUBAGENTS] : []), "--no-skills", "--no-prompt-templates", "--no-context-files"],
 		env: { PI_CODING_AGENT_DIR: agentDir, SCRIPT: script },
 	});
 	const context = { cwd: agentDir, model: "faux/faux-1", types };
@@ -150,4 +153,31 @@ test("stopping an agent ends its process; unknown types are refused", { timeout:
 	assert.equal(agent.state, "stopped");
 	assert.equal(manager.list().length, 0);
 	await assert.rejects(manager.start({ task: "x", type: "wizard" }, context), /Unknown agent type "wizard". Available: worker, scout/);
+});
+
+test("an agent reports its progress in its own words, even when its tools are limited", { timeout: 60_000 }, async () => {
+	const { manager, context } = setup("progress", {}, true);
+	try {
+		const agent = await manager.start({ task: "review auth", type: "scout" }, context);
+		await agent.whenSettled();
+		assert.equal(agent.state, "idle", agent.error);
+		assert.equal(agent.status, "Reading the auth module");
+		assert.ok(agent.transcript.some((item) => item.kind === "status" && item.text === "Reading the auth module"));
+	} finally {
+		await manager.stopAll();
+	}
+});
+
+test("the thinking level can be chosen per agent, and unknown levels are refused", { timeout: 60_000 }, async () => {
+	const { manager, context } = setup("echo");
+	try {
+		const agent = await manager.start({ task: "think hard", thinking: "high" }, { ...context, thinking: "low" });
+		const inherited = await manager.start({ task: "default" }, { ...context, thinking: "low" });
+		await Promise.all([agent.whenSettled(), inherited.whenSettled()]);
+		assert.equal(agent.info.thinking, "high", "the level the child really runs at");
+		assert.equal(inherited.info.thinking, "low");
+		await assert.rejects(manager.start({ task: "x", thinking: "extreme" }, context), /Unknown thinking level "extreme"/);
+	} finally {
+		await manager.stopAll();
+	}
 });
