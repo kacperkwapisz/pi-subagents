@@ -53,6 +53,7 @@ export function renderAgentsWidget(agents: Subagent[], theme: Theme, width: numb
 		const left = `${branch} ${stateIcon(theme, agent.state, frame)} ${typePill(theme, agent.info.type)} ${theme.bold(agent.info.name)}  ${activityText(theme, agent)}`;
 		lines.push(fitLine(left, metrics(theme, agent, withModel), width));
 	});
+	lines.push(theme.fg("dim", "← or /agents to watch and steer"));
 	return lines;
 }
 

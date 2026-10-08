@@ -59,12 +59,29 @@ def type_text(text):
         os.write(fd, char.encode())
         time.sleep(0.01)
 
+LEFT, DOWN, ESC = b"\x1b[D", b"\x1b[B", b"\x1b"
+
 pump(4)
 type_text("Check the project with three agents")
 os.write(fd, b"\r")
-for moment in os.environ.get("MOMENTS", "2,6,14").split(","):
-    pump(float(moment) - (0 if moment == "0" else 0))
-    show(f"after {moment}s more")
+if os.environ.get("SCENARIO", "widget") == "browser":
+    pump(2.5)
+    os.write(fd, LEFT)
+    pump(1)
+    show("← opens the browser")
+    type_text("focus on the refresh path")
+    os.write(fd, b"\r")
+    pump(1.5)
+    show("after steering")
+    pump(9)
+    show("the agent answered the steering")
+    os.write(fd, ESC)
+    pump(1)
+    show("Esc closes")
+else:
+    for moment in os.environ.get("MOMENTS", "2,6,14").split(","):
+        pump(float(moment))
+        show(f"after {moment}s more")
 os.write(fd, b"\x03")
 pump(0.5)
 os.write(fd, b"\x03")

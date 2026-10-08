@@ -1,9 +1,12 @@
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 import type { Subagent } from "./agent.ts";
 import { AgentManager, CHILD_ENV, type ManagerOptions } from "./manager.ts";
 import type { UiRequest } from "./rpc.ts";
+import { Questions } from "./questions.ts";
 import { registerTools } from "./tools.ts";
+import { AgentsBrowser } from "./ui/browser.ts";
 import { AgentsWidget } from "./ui/widget.ts";
 
 /** Asks the user a question that an extension inside a subagent asked. */
@@ -44,21 +47,62 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 		if (process.env[CHILD_ENV]) return;
 
 		let current: ExtensionContext | undefined;
+		const questions = new Questions((agent, request) => askInParent(current, agent, request));
 		const manager = new AgentManager({
 			sessionDir: () => join(getAgentDir(), "subagents", current?.sessionManager.getSessionId() ?? "session"),
-			askQuestion: (agent, request) => askInParent(current, agent, request),
+			askQuestion: (agent, request) => questions.ask(agent, request),
 			...overrides,
 		});
 		onManager?.(manager);
 		const widget = new AgentsWidget(manager, () => current);
 
+		let browserOpen = false;
+		const openBrowser = async (ctx: ExtensionContext, initial?: string) => {
+			if (browserOpen || ctx.mode !== "tui") return;
+			browserOpen = true;
+			questions.setInline(true);
+			try {
+				await ctx.ui.custom<void>(
+					(tui, theme, _keybindings, done) => new AgentsBrowser({ manager, questions, theme, tui, initial, close: () => done() }),
+					// Full screen, so nothing from the chat shows through around it.
+					{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "center", margin: 0 } },
+				);
+			} finally {
+				browserOpen = false;
+				questions.setInline(false);
+			}
+		};
+
+		pi.registerCommand("agents", {
+			description: "Watch and steer your subagents",
+			handler: async (args, ctx) => {
+				if (ctx.mode !== "tui") {
+					ctx.ui.notify("/agents needs the interactive terminal.", "warning");
+					return;
+				}
+				await openBrowser(ctx, args.trim() || undefined);
+			},
+		});
+
+		let stopListening: (() => void) | undefined;
 		pi.on("session_start", (_event, ctx) => {
 			current = ctx;
 			widget.update();
+			if (ctx.mode !== "tui") return;
+			// ← in an empty editor opens the browser while there are agents; otherwise ← is untouched.
+			stopListening?.();
+			stopListening = ctx.ui.onTerminalInput((data) => {
+				if (!matchesKey(data, Key.left) || browserOpen || manager.list().length === 0) return undefined;
+				if (ctx.ui.getEditorText() !== "") return undefined;
+				void openBrowser(ctx);
+				return { consume: true };
+			});
 		});
 		// A new message from the user: agents that already finished leave the widget.
 		pi.on("before_agent_start", () => widget.hideSettled());
 		pi.on("session_shutdown", async () => {
+			stopListening?.();
+			stopListening = undefined;
 			widget.dispose();
 			await manager.stopAll();
 			current = undefined;

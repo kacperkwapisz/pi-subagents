@@ -117,7 +117,9 @@ export function renderAgentsResult(
 			let clipped = false;
 			for (const agent of agents) {
 				lines.push(fitLine(headerLeft(theme, agent, frame), summary(theme, agent), width));
-				const body = agent.state === "failed" ? theme.fg("error", agent.error ?? "") : theme.fg("muted", agent.answer ?? "");
+				// Previews are plain lines, so Markdown emphasis marks would only be noise there.
+				const plain = (agent.answer ?? "").replace(/\*\*|__|`/g, "");
+				const body = agent.state === "failed" ? theme.fg("error", agent.error ?? "") : theme.fg("muted", plain);
 				const bodyLines = body.split("\n").filter((line) => line.trim());
 				for (const line of bodyLines.slice(0, PREVIEW_LINES)) lines.push(truncateToWidth(`  ${line}`, width));
 				if (bodyLines.length > PREVIEW_LINES) clipped = true;

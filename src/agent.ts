@@ -4,7 +4,7 @@ export type AgentState = "starting" | "running" | "idle" | "failed" | "stopped";
 
 /** One entry of a subagent's transcript, as the live view shows it. */
 export type TranscriptItem =
-	| { kind: "prompt"; text: string; via: "task" | "steer" | "follow-up" }
+	| { kind: "prompt"; text: string; via: "task" | "steer" | "follow-up" | "message" }
 	| { kind: "text"; text: string }
 	| { kind: "thinking"; text: string }
 	| { kind: "tool"; id: string; name: string; args: Record<string, unknown>; status: "running" | "done" | "error"; output: string }
@@ -154,7 +154,7 @@ export class Subagent {
 	/** Sends more input: steers a running agent, or starts a new run on an idle one. */
 	async send(message: string, followUp = false): Promise<void> {
 		if (this.state === "stopped" || !this.child.running) throw new Error(`${this.info.name} is no longer running.`);
-		const via = followUp ? "follow-up" : "steer";
+		const via = !this.busy ? "message" : followUp ? "follow-up" : "steer";
 		this.transcript.push({ kind: "prompt", text: message, via });
 		this.changed();
 		if (this.busy) {
