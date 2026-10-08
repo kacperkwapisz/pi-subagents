@@ -1,8 +1,9 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { Subagent } from "./agent.ts";
 import { discoverAgentTypes } from "./agent-types.ts";
 import { type AgentManager, MAX_AGENTS } from "./manager.ts";
+import { type AgentsDetails, renderAgentsResult, renderStartCall, renderWaitCall, snapshot } from "./ui/tool-render.ts";
 
 /** Each agent's answer is capped before it goes back to the main model. */
 const ANSWER_LIMIT = 50_000;
@@ -17,19 +18,37 @@ function answerOf(agent: Subagent): string {
 	return `${header}\n${clipped}`;
 }
 
-function text(value: string) {
-	return { content: [{ type: "text" as const, text: value }], details: {} };
+function text(value: string, agents: Subagent[] = []) {
+	const details: AgentsDetails = { agents: agents.map(snapshot) };
+	return { content: [{ type: "text" as const, text: value }], details };
 }
 
-/** Waits for agents to finish; Esc interrupts their current runs but keeps them. */
-async function waitFor(agents: Subagent[], signal: AbortSignal | undefined): Promise<void> {
+const PROGRESS_MS = 250;
+
+/**
+ * Waits for agents to finish while showing their progress in the tool's output. Esc
+ * interrupts their current runs but keeps the agents.
+ */
+async function waitFor(
+	agents: Subagent[],
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<AgentsDetails> | undefined,
+): Promise<void> {
+	const progress = () => onUpdate?.({ content: [{ type: "text", text: "Agents working…" }], details: { agents: agents.map(snapshot) } });
 	const onAbort = () => void Promise.all(agents.map((agent) => agent.abort().catch(() => {})));
 	signal?.addEventListener("abort", onAbort, { once: true });
+	progress();
+	const timer = setInterval(progress, PROGRESS_MS);
 	try {
 		await Promise.all(agents.map((agent) => agent.whenSettled(signal)));
 	} finally {
+		clearInterval(timer);
 		signal?.removeEventListener("abort", onAbort);
 	}
+}
+
+function resultText(result: { content: { type: string; text?: string }[] }): string {
+	return result.content.map((part) => part.text ?? "").join("\n");
 }
 
 function parentModel(ctx: ExtensionContext): string | undefined {
@@ -65,7 +84,13 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 			),
 			wait: Type.Optional(Type.Boolean({ description: "Wait for their answers (default true)." })),
 		}),
-		async execute(_id, params, signal, _onUpdate, ctx) {
+		renderCall(args, theme) {
+			return renderStartCall(Array.isArray(args.agents) ? args.agents : [], theme);
+		},
+		renderResult(result, options, theme) {
+			return renderAgentsResult(result.details as AgentsDetails | undefined, resultText(result), options, theme);
+		},
+		async execute(_id, params, signal, onUpdate, ctx) {
 			const context = {
 				cwd: ctx.cwd,
 				model: parentModel(ctx),
@@ -77,10 +102,10 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 			const problems = results.flatMap((result) => (result.status === "rejected" ? [`Could not start: ${(result.reason as Error).message}`] : []));
 			if (params.wait === false) {
 				const names = started.map((agent) => agent.info.name).join(", ");
-				return text([started.length ? `Started ${names}. Use agent_wait to get their answers.` : "", ...problems].filter(Boolean).join("\n"));
+				return text([started.length ? `Started ${names}. Use agent_wait to get their answers.` : "", ...problems].filter(Boolean).join("\n"), started);
 			}
-			await waitFor(started, signal);
-			return text([...problems, ...started.map(answerOf)].join("\n\n"));
+			await waitFor(started, signal, onUpdate);
+			return text([...problems, ...started.map(answerOf)].join("\n\n"), started);
 		},
 	});
 
@@ -91,14 +116,20 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 		parameters: Type.Object({
 			names: Type.Optional(Type.Array(Type.String(), { description: "Agents to wait for." })),
 		}),
-		async execute(_id, params, signal) {
+		renderCall(args, theme) {
+			return renderWaitCall(args.names, theme);
+		},
+		renderResult(result, options, theme) {
+			return renderAgentsResult(result.details as AgentsDetails | undefined, resultText(result), options, theme);
+		},
+		async execute(_id, params, signal, onUpdate) {
 			const agents = params.names?.length
 				? params.names.map((name) => manager.get(name)).filter((agent): agent is Subagent => !!agent)
 				: manager.list().filter((agent) => agent.busy);
 			const missing = (params.names ?? []).filter((name) => !manager.get(name));
 			if (agents.length === 0) return text(missing.length ? `No agent named ${missing.join(", ")}.` : "No agents are running.");
-			await waitFor(agents, signal);
-			return text([...missing.map((name) => `No agent named ${name}.`), ...agents.map(answerOf)].join("\n\n"));
+			await waitFor(agents, signal, onUpdate);
+			return text([...missing.map((name) => `No agent named ${name}.`), ...agents.map(answerOf)].join("\n\n"), agents);
 		},
 	});
 

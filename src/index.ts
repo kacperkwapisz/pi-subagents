@@ -4,6 +4,7 @@ import type { Subagent } from "./agent.ts";
 import { AgentManager, CHILD_ENV, type ManagerOptions } from "./manager.ts";
 import type { UiRequest } from "./rpc.ts";
 import { registerTools } from "./tools.ts";
+import { AgentsWidget } from "./ui/widget.ts";
 
 /** Asks the user a question that an extension inside a subagent asked. */
 async function askInParent(
@@ -49,11 +50,16 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 			...overrides,
 		});
 		onManager?.(manager);
+		const widget = new AgentsWidget(manager, () => current);
 
 		pi.on("session_start", (_event, ctx) => {
 			current = ctx;
+			widget.update();
 		});
+		// A new message from the user: agents that already finished leave the widget.
+		pi.on("before_agent_start", () => widget.hideSettled());
 		pi.on("session_shutdown", async () => {
+			widget.dispose();
 			await manager.stopAll();
 			current = undefined;
 		});

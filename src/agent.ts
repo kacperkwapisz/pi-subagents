@@ -41,6 +41,17 @@ function contentText(content: unknown): string {
 		.join("\n");
 }
 
+/** Pi's usage record as tokens in (including cache reads and writes), tokens out and cost. */
+function usageOf(value: unknown): AgentUsage {
+	const usage = (value ?? {}) as Record<string, unknown>;
+	const number = (field: unknown) => (typeof field === "number" && Number.isFinite(field) ? field : 0);
+	return {
+		input: number(usage.input) + number(usage.cacheRead) + number(usage.cacheWrite),
+		output: number(usage.output),
+		cost: number((usage.cost as Record<string, unknown> | undefined)?.total),
+	};
+}
+
 function shortPath(value: unknown): string {
 	return typeof value === "string" ? value.replace(/^.*\/(?=[^/]+\/[^/]+$)/, "") : "";
 }
@@ -77,7 +88,10 @@ export class Subagent {
 	state: AgentState = "starting";
 	/** What it is doing right now, e.g. "$ npm test" or "thinking". */
 	activity = "starting";
-	usage: AgentUsage = { input: 0, output: 0, cost: 0 };
+	/** Usage of finished replies; see `usage` for the live total. */
+	private settledUsage: AgentUsage = { input: 0, output: 0, cost: 0 };
+	/** Usage of the reply being streamed right now. */
+	private streamingUsage: AgentUsage = { input: 0, output: 0, cost: 0 };
 	readonly transcript: TranscriptItem[] = [];
 	/** Its last answer, once it has finished a run. */
 	result?: string;
@@ -105,6 +119,15 @@ export class Subagent {
 			this.activity = "exited";
 			this.changed();
 		});
+	}
+
+	/** Tokens and cost so far, including the reply being written right now. */
+	get usage(): AgentUsage {
+		return {
+			input: this.settledUsage.input + this.streamingUsage.input,
+			output: this.settledUsage.output + this.streamingUsage.output,
+			cost: this.settledUsage.cost + this.streamingUsage.cost,
+		};
 	}
 
 	/** Time spent running so far. */
@@ -200,6 +223,7 @@ export class Subagent {
 				if (this.state !== "stopped") this.state = "running";
 				break;
 			case "message_update":
+				this.streamingUsage = usageOf(record.usage);
 				this.handleStreamEvent(record.assistantMessageEvent as RpcRecord | undefined);
 				break;
 			case "message_end":
@@ -269,11 +293,13 @@ export class Subagent {
 
 	private handleMessageEnd(message: Record<string, unknown> | undefined): void {
 		if (message?.role !== "assistant") return;
-		const usage = (message.usage ?? {}) as Record<string, unknown>;
-		const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
-		this.usage.input += number(usage.input) + number(usage.cacheRead) + number(usage.cacheWrite);
-		this.usage.output += number(usage.output);
-		this.usage.cost += number((usage.cost as Record<string, unknown> | undefined)?.total);
+		const usage = usageOf(message.usage);
+		this.settledUsage = {
+			input: this.settledUsage.input + usage.input,
+			output: this.settledUsage.output + usage.output,
+			cost: this.settledUsage.cost + usage.cost,
+		};
+		this.streamingUsage = { input: 0, output: 0, cost: 0 };
 		// The account can change mid-task (pi-multi-account switching), so follow every reply.
 		if (typeof message.provider === "string" && typeof message.model === "string") {
 			this.info.model = `${message.provider}/${message.model}`;
