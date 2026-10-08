@@ -16,7 +16,7 @@ export function answerOf(agent: Subagent): string {
 	const header = `## ${agent.info.name} (${agent.info.type})`;
 	if (agent.state === "failed") return `${header}: failed\n${agent.error ?? "Unknown error."}`;
 	if (agent.state === "stopped") return `${header}: stopped`;
-	if (agent.busy) return `${header}: still running (${agent.activity})`;
+	if (agent.busy) return `${header}: still running (${agent.activity || "working"})`;
 	const answer = agent.result?.trim() || "(no answer)";
 	const clipped = answer.length > ANSWER_LIMIT ? `${answer.slice(0, ANSWER_LIMIT)}\n[answer cut at ${ANSWER_LIMIT} characters]` : answer;
 	return `${header}\n${clipped}`;
@@ -31,7 +31,7 @@ function text(value: string, agents: Subagent[] = []) {
 export function checkInOf(agent: Subagent): string {
 	const lines = [`## ${agent.info.name} (${agent.info.type}): still working, ${formatDuration(agent.elapsedMs)} so far`];
 	if (agent.status) lines.push(`Says: ${agent.status}`);
-	lines.push(`Now: ${agent.step()}`);
+	if (agent.step()) lines.push(`Now: ${agent.step()}`);
 	const latest = agent.transcript.findLast((item) => item.kind === "text" && item.text.trim());
 	if (latest && latest.kind === "text") {
 		const tail = latest.text.trim();
@@ -256,7 +256,8 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 				agents
 					.map((agent) => {
 						const tokens = `${agent.usage.input} in / ${agent.usage.output} out`;
-						const work = agent.status ? `${agent.status} (${agent.activity})` : agent.activity;
+						const step = agent.activity || "working";
+						const work = agent.status ? `${agent.status} (${step})` : step;
 						const thinking = agent.info.thinking && agent.info.thinking !== "off" ? `, thinking ${agent.info.thinking}` : "";
 						const state = agent.closed && agent.state !== "stopped" ? `${agent.state}, closed` : agent.state;
 						return `${agent.info.name} (${agent.info.type}): ${state}, ${work}; ${agent.info.model}${thinking}; ${tokens}`;

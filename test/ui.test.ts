@@ -117,6 +117,14 @@ test("a running agent shows its own status first, with the current step after it
 	assert.match(lines[1]!, /fix-auth {2}Fixing the refresh race · \$ npm test /);
 });
 
+test("between steps a row shows the agent's own status, or just that it is working", () => {
+	const withStatus = renderAgentsWidget([agent("fix-auth", "worker", "running", "", { status: "Fixing the refresh race" })], theme, 140);
+	assert.match(withStatus[1]!, /fix-auth {2}Fixing the refresh race {2}/);
+	assert.doesNotMatch(withStatus[1]!, /race · /, "no step after the status");
+	const plain = renderAgentsWidget([agent("scout", "scout", "running", "")], theme, 140);
+	assert.match(plain[1]!, /scout {2}working {2}/);
+});
+
 test("quick steps are held on screen instead of flickering", async () => {
 	const { Subagent, STEP_HOLD_MS } = await import("../src/agent.ts");
 	const child = { onEvent: () => () => {}, onUiRequest: () => () => {}, exited: new Promise(() => {}) };
@@ -124,7 +132,7 @@ test("quick steps are held on screen instead of flickering", async () => {
 	const start = 1_000_000;
 	agent.activity = "reading a.ts";
 	assert.equal(agent.step(start), "reading a.ts");
-	agent.activity = "thinking";
+	agent.activity = "";
 	assert.equal(agent.step(start + 200), "reading a.ts", "a new step waits");
 	agent.activity = "reading b.ts";
 	assert.equal(agent.step(start + STEP_HOLD_MS - 1), "reading a.ts");

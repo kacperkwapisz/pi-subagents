@@ -40,6 +40,7 @@ export function formatModel(model: string, thinking?: string): string {
 
 /** What a running agent is doing: its own status first, the current step after it. */
 export function describeWork(theme: Theme, status: string | undefined, step: string): string {
+	if (!step) return status ? theme.fg("text", status) : theme.fg("muted", "working");
 	if (!status) return theme.fg("muted", step);
 	return `${theme.fg("text", status)}${theme.fg("dim", ` · ${step}`)}`;
 }

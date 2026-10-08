@@ -93,7 +93,11 @@ export class Subagent {
 	readonly info: AgentInfo;
 	readonly createdAt = Date.now();
 	state: AgentState = "starting";
-	/** What it is doing right now, e.g. "$ npm test" or "thinking". Changes fast; see `step`. */
+	/**
+	 * What it is doing right now, e.g. "$ npm test" or "thinking" (only while the model streams
+	 * its reasoning). Empty between steps, while the model works out what to do next. Changes
+	 * fast; see `step`.
+	 */
 	activity = "starting";
 	/** What the agent says it is working on, in its own words. */
 	status?: string;
@@ -313,7 +317,8 @@ export class Subagent {
 					item.status = record.isError ? "error" : "done";
 					item.output = contentText((record.result as { content?: unknown } | undefined)?.content).slice(0, TOOL_OUTPUT_LIMIT);
 				}
-				this.activity = "thinking";
+				// No step until the model does something; the row shows the agent's status alone.
+				this.activity = "";
 				break;
 			}
 			case "auto_retry_start":
