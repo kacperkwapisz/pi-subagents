@@ -54,14 +54,8 @@ export function renderAgentsWidget(agents: Subagent[], theme: Theme, width: numb
 		const left = `${branch} ${stateIcon(theme, agent.state, frame)} ${typePill(theme, agent.info.type)} ${theme.bold(agent.info.name)}  ${activityText(theme, agent)}`;
 		lines.push(fitLine(left, metrics(theme, agent, withModel), width));
 	});
-	lines.push(theme.fg("dim", `${openHint} to watch and steer`));
+	lines.push(theme.fg("dim", "← or /agents to watch and steer"));
 	return lines;
-}
-
-let openHint = "← or /agents";
-/** How the widget says to open the browser (set once the shortcut is known). */
-export function setOpenHint(hint: string): void {
-	openHint = hint;
 }
 
 /**

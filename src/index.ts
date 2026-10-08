@@ -10,7 +10,7 @@ import { answerOf, registerTools } from "./tools.ts";
 import { safely } from "./ui/safe.ts";
 import { type AgentSnapshot, renderAgentsResult, snapshot } from "./ui/tool-render.ts";
 import { AgentsBrowser } from "./ui/browser.ts";
-import { AgentsWidget, setOpenHint } from "./ui/widget.ts";
+import { AgentsWidget } from "./ui/widget.ts";
 
 /** Opens the agents view from anywhere (← also does in an empty editor). */
 export const OPEN_SHORTCUT = "ctrl+shift+a";
@@ -70,7 +70,6 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 				if (current) void openBrowser(current, name);
 			},
 		);
-		setOpenHint("← or Ctrl+Shift+A");
 
 		pi.events.on(QUERY_EVENT, (data) => {
 			const reply = (data as { reply?: unknown } | undefined)?.reply;
