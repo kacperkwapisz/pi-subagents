@@ -152,3 +152,15 @@ test("clicking an agent's row in the widget opens it; the header or hint opens t
 	assert.deepEqual(opened, ["tests", undefined, undefined]);
 	assert.equal(widgetClick(event("click", 4), agents, (name) => opened.push(name)), undefined, "below the widget");
 });
+
+test("a closed agent leaves the widget right away; open ones stay", async () => {
+	const { AgentsWidget } = await import("../src/ui/widget.ts");
+	const agents = [
+		agent("working", "worker", "running", "$ npm test"),
+		agent("finished-open", "worker", "idle", "done"),
+		agent("finished-closed", "worker", "idle", "done", { closed: true }),
+	];
+	const manager = { list: () => agents, onChange: () => () => {} } as never;
+	const widget = new AgentsWidget(manager, () => undefined);
+	assert.deepEqual(widget.visible().map((each) => each.info.name), ["working", "finished-open"]);
+});

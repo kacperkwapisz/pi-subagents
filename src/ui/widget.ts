@@ -75,8 +75,8 @@ export function widgetClick(
 }
 
 /**
- * Keeps the agents widget above the editor in sync with the manager. Agents that had already
- * finished when a new message is sent drop out of it; agents still working stay.
+ * Keeps the agents widget above the editor in sync with the manager. An agent drops out once it
+ * closes, or when the user sends a new message after it finished; agents still working stay.
  */
 export class AgentsWidget {
 	private readonly manager: AgentManager;
@@ -95,8 +95,9 @@ export class AgentsWidget {
 		manager.onChange(() => this.update());
 	}
 
+	/** Agents still open: one leaves as soon as it closes (30s after finishing, by default). */
 	visible(): Subagent[] {
-		return this.manager.list().filter((agent) => !this.hidden.has(agent));
+		return this.manager.list().filter((agent) => !agent.closed && !this.hidden.has(agent));
 	}
 
 	/** On a new message from the user: finished agents leave the widget. */

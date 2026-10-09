@@ -14,6 +14,8 @@ export const MAX_AGENTS = 8;
 /** A finished agent stays open this long for follow-ups unless asked otherwise. */
 export const DEFAULT_KEEP_OPEN_MS = 30_000;
 export const MAX_KEEP_OPEN_MS = 600_000;
+/** A closed agent can still be looked at in /agents for this long, then it is forgotten. */
+export const FORGET_CLOSED_MS = 5 * 60_000;
 
 export interface StartRequest {
 	task: string;
@@ -52,6 +54,8 @@ export interface ManagerOptions {
 	pi?: PiCommand;
 	extraArgs?: string[];
 	env?: Record<string, string>;
+	/** Tests: how long a closed agent is kept (FORGET_CLOSED_MS). */
+	forgetClosedAfterMs?: number;
 }
 
 function slug(text: string): string {
@@ -152,7 +156,10 @@ export class AgentManager {
 			this.options.askQuestion,
 			keepOpenMs,
 		);
-		agent.onChange(() => this.changed());
+		agent.onChange(() => {
+			if (agent.closed) this.forgetLater(name, agent);
+			this.changed();
+		});
 		agent.onSettled((detached, interrupted) => this.finished(agent, { detached, stoppedByUser: false, interrupted }));
 		this.agents.set(name, agent);
 		child.start();
@@ -172,22 +179,41 @@ export class AgentManager {
 		if (!agent) return;
 		// A user stopping a background agent mid-run is news for the model; a stop it asked for isn't.
 		if (options.byUser && agent.busy && !agent.waitedOn) this.finished(agent, { detached: true, stoppedByUser: true });
-		this.agents.delete(name);
+		this.forget(name);
 		await agent.stop();
-		rmSync(join(this.options.sessionDir(), `${name}.prompt.md`), { force: true });
 		this.changed();
+	}
+
+	private readonly forgetTimers = new Map<Subagent, ReturnType<typeof setTimeout>>();
+
+	/** Closed agents don't pile up during a long run: each is forgotten a while after closing. */
+	private forgetLater(name: string, agent: Subagent): void {
+		if (this.forgetTimers.has(agent)) return;
+		const timer = setTimeout(() => {
+			this.forgetTimers.delete(agent);
+			if (this.agents.get(name) !== agent) return;
+			this.forget(name);
+			this.changed();
+		}, this.options.forgetClosedAfterMs ?? FORGET_CLOSED_MS);
+		timer.unref?.();
+		this.forgetTimers.set(agent, timer);
+	}
+
+	private forget(name: string): void {
+		const agent = this.agents.get(name);
+		if (!agent) return;
+		const timer = this.forgetTimers.get(agent);
+		if (timer) clearTimeout(timer);
+		this.forgetTimers.delete(agent);
+		this.agents.delete(name);
+		rmSync(join(this.options.sessionDir(), `${name}.prompt.md`), { force: true });
 	}
 
 	/** Drops closed agents entirely, freeing their transcripts. Called when the user sends a new message. */
 	forgetClosed(): void {
-		let removed = false;
-		for (const [name, agent] of this.agents) {
-			if (!agent.closed) continue;
-			this.agents.delete(name);
-			rmSync(join(this.options.sessionDir(), `${name}.prompt.md`), { force: true });
-			removed = true;
-		}
-		if (removed) this.changed();
+		const closed = [...this.agents].filter(([, agent]) => agent.closed).map(([name]) => name);
+		for (const name of closed) this.forget(name);
+		if (closed.length > 0) this.changed();
 	}
 
 	async stopAll(): Promise<void> {

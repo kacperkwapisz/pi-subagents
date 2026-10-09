@@ -21,8 +21,8 @@ answers).
 
 Agents are one-off: each one closes by itself 30 seconds after it finishes, unless it gets more
 work in that time, so finished agents don't pile up. The model can keep one open longer when it
-plans follow-ups, and stops agents it no longer needs. Closed agents are cleared from view when
-you send your next message.
+plans follow-ups, and stops agents it no longer needs. A closed agent leaves the list above the
+editor at once; `/agents` still shows it for 5 minutes (or until your next message).
 
 Agents report what they are working on in their own words ("Reading the auth module", "Found 2
 races; checking the tests"), shown next to their name with the current step after it. The model

@@ -19,7 +19,7 @@ const types: AgentType[] = [
 
 const SUBAGENTS = join(import.meta.dirname, "..", "src", "index.ts");
 
-function setup(script: string, answer: { confirmed?: boolean } = {}, withProgressTool = false) {
+function setup(script: string, answer: { confirmed?: boolean } = {}, withProgressTool = false, extra: { forgetClosedAfterMs?: number } = {}) {
 	const agentDir = mkdtempSync(join(tmpdir(), "psa-agent-"));
 	writeFileSync(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "x" } }));
 	const questions: string[] = [];
@@ -33,6 +33,7 @@ function setup(script: string, answer: { confirmed?: boolean } = {}, withProgres
 		// With withProgressTool the child also loads pi-subagents, as a real subagent does.
 		extraArgs: ["--no-extensions", "-e", FIXTURE, ...(withProgressTool ? ["-e", SUBAGENTS] : []), "--no-skills", "--no-prompt-templates", "--no-context-files"],
 		env: { PI_CODING_AGENT_DIR: agentDir, SCRIPT: script },
+		...extra,
 	});
 	const context = { cwd: agentDir, model: "faux/faux-1", types };
 	return { manager, context, questions };
@@ -268,6 +269,21 @@ test("an interrupted background run is reported as interrupted, not as finished"
 		await agent.abort();
 		await until(() => finishes.length > 0);
 		assert.deepEqual(finishes, ["busy:true:true"]);
+	} finally {
+		await manager.stopAll();
+	}
+});
+
+test("during a long run, closed agents are forgotten a while after closing", { timeout: 60_000 }, async () => {
+	const { manager, context } = setup("echo", {}, false, { forgetClosedAfterMs: 300 });
+	try {
+		const open = await manager.start({ task: "kept", name: "kept", keepOpenMs: 60_000 }, context);
+		await open.whenSettled();
+		const done = await manager.start({ task: "quick", name: "quick", keepOpenMs: 0 }, context);
+		await until(() => done.closed);
+		assert.deepEqual(manager.list().map((agent) => agent.info.name).sort(), ["kept", "quick"], "still viewable right after closing");
+		await until(() => manager.list().length === 1, 5_000);
+		assert.deepEqual(manager.list().map((agent) => agent.info.name), ["kept"], "an open agent stays");
 	} finally {
 		await manager.stopAll();
 	}
