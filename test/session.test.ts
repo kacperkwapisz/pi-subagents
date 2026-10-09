@@ -337,3 +337,31 @@ test("without pi-subscription-usage a failure is reported at once", { timeout: 9
 		await close();
 	}
 });
+
+test("Esc while waiting stops the wait, not the agents: they finish and report back", { timeout: 90_000 }, async () => {
+	let report = "";
+	const { session, close, manager } = await startSession(
+		[
+			fauxAssistantMessage(fauxToolCall("agent_start", { agents: [{ task: "long job", name: "keeps-going" }] })),
+			(context) => {
+				report = lastText(context);
+				return fauxAssistantMessage("Picked up its result.");
+			},
+		],
+		undefined,
+		"slow",
+	);
+	try {
+		const run = session.prompt("Run a long job.");
+		await until(() => manager().list().some((agent) => agent.busy));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		await session.abort();
+		await run.catch(() => {});
+		const agent = manager().get("keeps-going")!;
+		assert.equal(agent.busy, true, "still working after Esc");
+		await until(() => report !== "", 30_000);
+		assert.match(report, /Agent keeps-going finished in the background\.\n\n## keeps-going \(worker\)\nword word/);
+	} finally {
+		await close();
+	}
+});

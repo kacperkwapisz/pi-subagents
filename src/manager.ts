@@ -67,7 +67,7 @@ export interface FinishEvent {
 	detached: boolean;
 	/** The user stopped it (in the agents view) before it finished. */
 	stoppedByUser: boolean;
-	/** Its run was interrupted (Esc in the main session, or Ctrl+C in the agents view). */
+	/** Its run was interrupted (Ctrl+C in the agents view). */
 	interrupted?: boolean;
 }
 

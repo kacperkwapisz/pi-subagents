@@ -243,7 +243,7 @@ export class Subagent {
 
 	/** Resolves when the current run has finished (or right away when it is not running). */
 	whenSettled(signal?: AbortSignal): Promise<void> {
-		if (!this.busy) return Promise.resolve();
+		if (!this.busy || signal?.aborted) return Promise.resolve();
 		return new Promise((resolve) => {
 			const done = () => {
 				this.settleWaiters.delete(done);

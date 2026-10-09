@@ -59,8 +59,8 @@ function workingMessage(agents: Subagent[]): string {
 
 /**
  * Waits for agents to finish while showing their progress in the tool's output, up to the
- * check-in time. Esc interrupts their current runs but keeps the agents. Agents still running
- * at check-in keep going; the wait just stops, and they report back on their own later.
+ * check-in time. Esc (or the check-in) only ends the wait: the agents keep working and report
+ * back on their own when they finish. Stopping them is up to agent_stop or the agents view.
  */
 async function waitFor(
 	agents: Subagent[],
@@ -75,10 +75,7 @@ async function waitFor(
 		working(workingMessage(agents));
 		onUpdate?.({ content: [{ type: "text", text: "Agents working…" }], details: { agents: agents.map(snapshot) } });
 	};
-	const onAbort = () => {
-		stopWaiting.abort();
-		void Promise.all(agents.map((agent) => agent.abort().catch(() => {})));
-	};
+	const onAbort = () => stopWaiting.abort();
 	if (signal?.aborted) onAbort();
 	signal?.addEventListener("abort", onAbort, { once: true });
 	const checkIn = setTimeout(() => stopWaiting.abort(), Math.min(MAX_CHECK_IN_S, Math.max(1, checkInSeconds)) * 1000);

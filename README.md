@@ -36,6 +36,8 @@ used only when needed.
 
 When the model starts agents in the background and carries on, their results come back on
 their own: you get a notification, and the main agent picks up the answer in its next turn.
+Pressing Esc while the main agent waits for agents stops the main agent, not the agents: they
+keep working and report back the same way. To stop an agent, use Ctrl+X in `/agents`.
 Waiting has a limit too: after 5 minutes the main agent gets a check-in with how far each agent
 got and decides whether to wait longer, steer it or stop it. The agents keep working meanwhile,
 and Pi's working line says which ones it is waiting for.
