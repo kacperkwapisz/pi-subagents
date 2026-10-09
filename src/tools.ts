@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import type { Subagent } from "./agent.ts";
 import { discoverAgentTypes } from "./agent-types.ts";
 import { conversationSnapshot } from "./context.ts";
+import { annotateFailures, statusFor } from "./status.ts";
 import { type AgentManager, DEFAULT_KEEP_OPEN_MS, MAX_AGENTS, MAX_KEEP_OPEN_MS, THINKING_LEVELS } from "./manager.ts";
 import { formatDuration } from "./ui/format.ts";
 import { safely } from "./ui/safe.ts";
@@ -14,7 +15,10 @@ const ANSWER_LIMIT = 50_000;
 
 export function answerOf(agent: Subagent): string {
 	const header = `## ${agent.info.name} (${agent.info.type})`;
-	if (agent.state === "failed") return `${header}: failed\n${agent.error ?? "Unknown error."}`;
+	if (agent.state === "failed") {
+		const status = agent.providerStatus ? `\nProvider status: ${agent.providerStatus}` : "";
+		return `${header}: failed\n${agent.error ?? "Unknown error."}${status}`;
+	}
 	if (agent.state === "stopped") return `${header}: stopped`;
 	if (agent.busy) return `${header}: still running (${agent.activity || "working"})`;
 	const answer = agent.result?.trim() || "(no answer)";
@@ -181,12 +185,19 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 				),
 			);
 			const started = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-			const problems = results.flatMap((result) => (result.status === "rejected" ? [`Could not start: ${(result.reason as Error).message}`] : []));
+			let problems = results.flatMap((result) => (result.status === "rejected" ? [`Could not start: ${(result.reason as Error).message}`] : []));
+			if (problems.length > 0) {
+				// Say whether the provider is having trouble, for the model and the user alike.
+				const models = [...new Set(params.agents.map((request) => request.model ?? context.model))];
+				const statuses = (await Promise.all(models.map((model) => statusFor(pi.events, model)))).filter(Boolean);
+				problems = [...problems, ...statuses.map((status) => `Provider status: ${status}`)];
+			}
 			if (params.wait === false) {
 				const names = started.map((agent) => agent.info.name).join(", ");
 				return text([started.length ? `Started ${names}. Use agent_wait to get their answers.` : "", ...problems].filter(Boolean).join("\n"), started);
 			}
 			await waitFor(started, signal, onUpdate, ctx, params.checkIn);
+			await annotateFailures(pi.events, started);
 			return text(report(started, problems), started);
 		},
 	});
@@ -212,6 +223,7 @@ export function registerTools(pi: ExtensionAPI, manager: AgentManager): void {
 			const missing = (params.names ?? []).filter((name) => !manager.get(name));
 			if (agents.length === 0) return text(missing.length ? `No agent named ${missing.join(", ")}.` : "No agents are running.");
 			await waitFor(agents, signal, onUpdate, ctx, params.checkIn);
+			await annotateFailures(pi.events, agents);
 			return text(report(agents, missing.map((name) => `No agent named ${name}.`)), agents);
 		},
 	});

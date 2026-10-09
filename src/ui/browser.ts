@@ -411,7 +411,10 @@ export class AgentsBrowser implements Component, Focusable {
 		const header = fitLine(left, numbers.join("  "), width);
 
 		const transcript = this.transcripts.render(agent.transcript, width, this.frame);
-		if (agent.state === "failed" && agent.error) transcript.push("", t.fg("error", `✗ ${agent.error}`));
+		if (agent.state === "failed" && agent.error) {
+			transcript.push("", t.fg("error", `✗ ${agent.error}`));
+			if (agent.providerStatus) transcript.push(t.fg("muted", `  ${agent.providerStatus}`));
+		}
 		const viewport = height - 2;
 		const scroll = this.scroll.get(agent.info.name) ?? { follow: true, offset: 0 };
 		const offset = scroll.follow ? 0 : Math.min(scroll.offset, Math.max(0, transcript.length - viewport));

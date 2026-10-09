@@ -106,6 +106,8 @@ export class Subagent {
 	 * The final state, answer and transcript stay readable; it takes no more work.
 	 */
 	closed = false;
+	/** After a failure: the provider's status page, e.g. "status.claude.com: …"; "" when unknown. */
+	providerStatus?: string;
 	/** How long it stays open after finishing, for follow-ups. */
 	readonly keepOpenMs: number;
 	private closeTimer?: ReturnType<typeof setTimeout>;

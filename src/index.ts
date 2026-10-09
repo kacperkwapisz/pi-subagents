@@ -6,6 +6,7 @@ import { AgentManager, CHILD_ENV, type ManagerOptions } from "./manager.ts";
 import type { UiRequest } from "./rpc.ts";
 import { registerProgressTool } from "./progress.ts";
 import { Questions } from "./questions.ts";
+import { annotateFailures } from "./status.ts";
 import { answerOf, registerTools } from "./tools.ts";
 import { safely } from "./ui/safe.ts";
 import { type AgentSnapshot, renderAgentsResult, snapshot } from "./ui/tool-render.ts";
@@ -90,6 +91,11 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 				current.ui.notify(`Agent ${name} ${what}`, ok || stoppedByUser ? "info" : "error");
 			}
 			pi.events.emit(FINISHED_EVENT, { name, status: agent.state, triggersTurn: !stoppedByUser });
+			void report(agent, stoppedByUser);
+		});
+		const report = async (agent: Subagent, stoppedByUser: boolean) => {
+			const name = agent.info.name;
+			await annotateFailures(pi.events, [agent]);
 			const content = stoppedByUser
 				? `The user stopped agent ${name} before it finished.`
 				: `Agent ${name} finished in the background.\n\n${answerOf(agent)}`;
@@ -97,7 +103,7 @@ export function createPiSubagents(overrides: Partial<ManagerOptions> = {}, onMan
 				{ customType: RESULT_MESSAGE, content, display: true, details: snapshot(agent) },
 				stoppedByUser ? { triggerTurn: false } : { triggerTurn: true, deliverAs: "followUp" },
 			);
-		});
+		};
 
 		pi.registerMessageRenderer<AgentSnapshot>(RESULT_MESSAGE, (message, { expanded }, theme) =>
 			safely(() =>

@@ -282,3 +282,58 @@ test("a long wait checks in; the agent keeps working and reports back on its own
 		await close();
 	}
 });
+
+test("a failed agent's answer says what the provider's status page says", { timeout: 90_000 }, async () => {
+	let answer = "";
+	const asked: string[] = [];
+	// Stands in for pi-subscription-usage.
+	const usage: ExtensionFactory = (pi) => {
+		pi.events.on("pi-subscription-usage:status", (data) => {
+			const { provider, accept, reply } = data as { provider: string; accept: () => void; reply: (result: unknown) => void };
+			asked.push(provider);
+			accept();
+			setTimeout(() => reply({ ok: true, status: { page: "status.claude.com", description: "Major Outage", problems: ["Elevated errors on Claude Opus (investigating)"] } }), 50);
+		});
+	};
+	const { session, close } = await startSession(
+		[
+			fauxAssistantMessage(fauxToolCall("agent_start", { agents: [{ task: "anything", name: "unlucky" }] })),
+			(context) => {
+				answer = toolResults(context).at(-1) ?? "";
+				return fauxAssistantMessage("ok");
+			},
+		],
+		usage,
+		"fail",
+	);
+	try {
+		await session.prompt("Start an agent.");
+		assert.deepEqual(asked, ["faux"]);
+		assert.match(answer, /## unlucky \(worker\): failed\nYou've hit your usage limit\.\nProvider status: status\.claude\.com: Major Outage\. Elevated errors on Claude Opus \(investigating\)/);
+	} finally {
+		await close();
+	}
+});
+
+test("without pi-subscription-usage a failure is reported at once", { timeout: 90_000 }, async () => {
+	let answer = "";
+	const { session, close } = await startSession(
+		[
+			fauxAssistantMessage(fauxToolCall("agent_start", { agents: [{ task: "anything", name: "unlucky" }] })),
+			(context) => {
+				answer = toolResults(context).at(-1) ?? "";
+				return fauxAssistantMessage("ok");
+			},
+		],
+		undefined,
+		"fail",
+	);
+	try {
+		const started = Date.now();
+		await session.prompt("Start an agent.");
+		assert.ok(Date.now() - started < 3_000, "no wait for a status that isn't coming");
+		assert.match(answer, /: failed\nYou've hit your usage limit\.$/);
+	} finally {
+		await close();
+	}
+});

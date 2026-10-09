@@ -94,6 +94,12 @@ unless told not to; per agent you can set its type, model, thinking level and ho
 open after finishing, and whether it starts with the conversation), `agent_wait` (both wait up to
 a check-in time), `agent_send`, `agent_list` and `agent_stop`.
 
+When an agent fails, or can't start, its error includes the provider's status page (for example
+"status.claude.com: Partially Degraded Service. Elevated errors on Claude Opus"), so you and the
+model can tell an outage from a problem on your side. This needs
+[pi-subscription-usage](https://github.com/kacperkwapisz/pi-subscription-usage); without it,
+errors look as before.
+
 ## For other extensions
 
 Like bg-jobs, pi-subagents answers on Pi's `pi.events` bus, so for example a goal loop can wait
